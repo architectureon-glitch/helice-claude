@@ -188,6 +188,9 @@ PLOT_HEIGHT_PX = 800  # px - hauteur des figures produites
 PLOT_MARGIN_PX = 70  # px - marge autour de la zone tracee
 PLOT_TICKS = 6  # - - nombre de graduations par axe
 PLOT_DPI = 96  # px/pouce - resolution declaree dans l'entete PNG
+VIEWER_MAX_FACES = 120000  # triangles - au-dela, le maillage est decime pour la vue 3D
+VIEWER_CIRCLE_SEGMENTS = 128  # segments - finesse des cercles de reperage de la vue 3D
+VIEWER_CLASS_DEPTH = 2.0  # cellules - profondeur de sondage sous une facette pour la classer
 PLOT_BAND_VIDE = 0.15  # - - position d'affichage du seuil F_VIDE sur l'echelle de couleur
 PLOT_BAND_PLEIN = 0.85  # - - position d'affichage du seuil F_SOLIDE sur l'echelle de couleur
 

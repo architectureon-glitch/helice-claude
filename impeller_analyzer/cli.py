@@ -92,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="ne pas verifier la periodicite par distance de Hausdorff (plus rapide)",
     )
     parser.add_argument("--sans-trimesh", action="store_true", help="forcer le lecteur interne pour les maillages")
+    parser.add_argument("--sans-vue3d", action="store_true", help="ne pas produire la vue 3D interactive")
     parser.add_argument("--quiet", action="store_true", help="n'ecrire que les fichiers, sans resume console")
     parser.add_argument("--version", action="version", version=f"impeller-analyzer {__version__}")
     return parser
@@ -148,7 +149,7 @@ def summarise(result, produced: dict[str, str]) -> str:
     lines.append(f"Confiance globale : {result.overall_confidence()}")
     if result.warnings:
         lines.append(f"{len(result.warnings)} avertissement(s), voir le rapport")
-    for key in ("markdown", "json", "curves", "occupancy"):
+    for key in ("viewer", "markdown", "json", "curves", "occupancy"):
         if key in produced:
             lines.append(f"  ecrit : {produced[key]}")
     return "\n".join(lines)
@@ -166,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"erreur : {error}", file=sys.stderr)
         return 2
 
-    produced = report.write_all(result, args.out, source=args.fichier)
+    produced = report.write_all(result, args.out, source=args.fichier, viewer_page=not args.sans_vue3d)
     if not args.quiet:
         print(summarise(result, produced))
     return 0

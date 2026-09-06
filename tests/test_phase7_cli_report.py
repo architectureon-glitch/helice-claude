@@ -41,7 +41,7 @@ class TestCommandLine(CliTestCase):
         """La SPEC demande resultats.json, rapport.md et courbes.png."""
         code, output, _ = self.invoke()
         self.assertEqual(code, 0)
-        for name in (report.JSON_NAME, report.MARKDOWN_NAME, report.CURVES_NAME):
+        for name in (report.JSON_NAME, report.MARKDOWN_NAME, report.CURVES_NAME, report.VIEWER_NAME):
             with self.subTest(name=name):
                 self.assertTrue(os.path.isfile(os.path.join(self.out, name)))
         # La carte d'occupation est produite en plus, pour le controle visuel.
@@ -213,7 +213,7 @@ class TestReportPieces(CliTestCase):
         target = self.path("sous/dossier/rapport")
         produced = report.write_all(result, target, source=self.source)
         self.assertTrue(os.path.isdir(target))
-        self.assertEqual(set(produced), {"json", "markdown", "curves", "occupancy"})
+        self.assertEqual(set(produced), {"json", "markdown", "curves", "occupancy", "viewer"})
 
 
 if __name__ == "__main__":  # pragma: no cover

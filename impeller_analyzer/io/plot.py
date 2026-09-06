@@ -169,6 +169,12 @@ class Canvas:
 
     def write_png(self, path: str) -> str:
         """Encode et ecrit l'image en PNG (couleur vraie, 8 bits par canal)."""
+        with open(path, "wb") as handle:
+            handle.write(self.encode_png())
+        return path
+
+    def encode_png(self) -> bytes:
+        """Encode l'image en PNG et renvoie les octets."""
         raw = bytearray()
         stride = self.width * 3
         for y in range(self.height):
@@ -191,9 +197,7 @@ class Canvas:
             + chunk(b"IDAT", zlib.compress(bytes(raw), 6))
             + chunk(b"IEND", b"")
         )
-        with open(path, "wb") as handle:
-            handle.write(data)
-        return path
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -270,13 +274,14 @@ def _format_tick(value: float) -> str:
     return f"{value:.2f}"
 
 
-def occupancy_png(occupancy_map, path: str, title: str = "Carte d'occupation f(r, z)") -> str:
+def occupancy_canvas(occupancy_map, title: str = "Carte d'occupation f(r, z)") -> "Canvas":
     """Trace la carte `f(r, z)` : abscisse le rayon, ordonnee la hauteur.
 
     L'echelle de couleur est calee sur les deux seuils de la SPEC (voir
     `occupancy_scale`), de sorte que moyeu, zone de pales et veine fluide se
     distinguent d'un coup d'oeil : c'est l'outil de mise au point visuelle de
-    toutes les phases suivantes.
+    toutes les phases suivantes.  Renvoie le canevas, que l'appelant ecrit ou
+    encode selon ses besoins.
     """
     width, height = config.PLOT_WIDTH_PX, config.PLOT_HEIGHT_PX
     margin = config.PLOT_MARGIN_PX
@@ -323,7 +328,12 @@ def occupancy_png(occupancy_map, path: str, title: str = "Carte d'occupation f(r
         y = plot_y1 - (plot_y1 - plot_y0) * occupancy_scale(level)
         canvas.line(bar_x0 - 5, y, bar_x1, y, BLACK)
         canvas.text(bar_x1 + 4, int(y) - 3, label, BLACK)
-    return canvas.write_png(path)
+    return canvas
+
+
+def occupancy_png(occupancy_map, path: str, title: str = "Carte d'occupation f(r, z)") -> str:
+    """Trace la carte f(r, z) et l'ecrit en PNG."""
+    return occupancy_canvas(occupancy_map, title).write_png(path)
 
 
 def curves_png(

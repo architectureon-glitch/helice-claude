@@ -56,7 +56,31 @@ Dans le dossier `--out` :
 - `courbes.png` — H–Q, rendement–Q et NPSHr–Q, une couleur par régime ;
 - `carte_occupation.png` — la carte `f(r, z)`, l'outil de contrôle visuel de
   toute la chaîne : on y lit d'un coup d'œil le moyeu, la zone de pales et la
-  veine fluide.
+  veine fluide ;
+- `vue3d.html` — la roue en 3D, manipulable.
+
+### La vue 3D
+
+Ouvrez `vue3d.html` dans n'importe quel navigateur : un seul fichier, aucune
+dépendance, le maillage y est embarqué. Il fonctionne hors ligne et s'envoie par
+courriel tel quel.
+
+Le maillage y est **colorié selon ce que l'outil a compris** — acier pour le
+moyeu et le flasque, sarcelle pour les pales — ce qui vérifie la segmentation
+bien plus directement que la carte en coupe. S'y ajoutent les cercles `r1s`,
+`r1h` et `r2` tracés à leurs vrais plans `z1` et `z2`, la flèche de sens de
+sortie du liquide, et l'arc de sens de rotation.
+
+Le bouton **Faire tourner** met la roue en rotation dans le sens calculé, et
+**Vue de dessus (+Z)** vous place exactement au point de vue depuis lequel ce
+sens est énoncé (« vu de +Z, côté aspiration ») : c'est là qu'on vérifie le
+résultat d'un coup d'œil. **Demi-coupe** tranche la roue par un plan passant par
+l'axe et découvre la veine méridienne.
+
+`--sans-vue3d` s'en passe si le fichier de sortie vous paraît trop lourd (il
+pèse à peu près la taille du maillage : environ 1 Mo pour 17 000 triangles ;
+au-delà de 120 000 triangles le maillage est décimé pour l'affichage seul, le
+calcul restant fait sur le maillage complet).
 
 ## Comment ça marche
 
@@ -184,7 +208,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-123 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+135 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture
@@ -204,6 +228,7 @@ impeller_analyzer/
 │   ├── repair.py        # orientation des normales, rebouchage
 │   ├── writer.py        # écriture STL/OBJ/PLY/OFF/DXF
 │   ├── plot.py          # rendu PNG par zlib seul
+│   ├── viewer.py        # vue 3D WebGL autonome, en un fichier
 │   └── report.py        # resultats.json, rapport.md, courbes.png
 ├── geometry/
 │   ├── axis.py          # détection de l'axe, recentrage

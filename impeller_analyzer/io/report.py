@@ -7,12 +7,13 @@ import os
 
 from .. import config
 from ..analysis import AnalysisResult
-from . import plot
+from . import plot, viewer
 
 JSON_NAME = "resultats.json"
 MARKDOWN_NAME = "rapport.md"
 CURVES_NAME = "courbes.png"
 OCCUPANCY_NAME = "carte_occupation.png"
+VIEWER_NAME = "vue3d.html"
 
 #: Traduction des niveaux de confiance pour le rapport lisible.
 CONFIDENCE_LABELS = {"high": "haute", "medium": "moyenne", "low": "faible"}
@@ -304,8 +305,10 @@ def write_occupancy(result: AnalysisResult, directory: str) -> str | None:
     return plot.occupancy_png(result.occupancy, path, title)
 
 
-def write_all(result: AnalysisResult, directory: str, source: str = "") -> dict[str, str]:
-    """Produit les trois sorties de la SPEC, plus la carte d'occupation."""
+def write_all(
+    result: AnalysisResult, directory: str, source: str = "", viewer_page: bool = True
+) -> dict[str, str]:
+    """Produit les trois sorties de la SPEC, la carte d'occupation et la vue 3D."""
     os.makedirs(directory, exist_ok=True)
     produced = {
         "json": write_json(result, directory),
@@ -315,4 +318,6 @@ def write_all(result: AnalysisResult, directory: str, source: str = "") -> dict[
     occupancy = write_occupancy(result, directory)
     if occupancy:
         produced["occupancy"] = occupancy
+    if viewer_page and result.mesh is not None:
+        produced["viewer"] = viewer.write_page(result, directory, VIEWER_NAME)
     return produced
