@@ -382,9 +382,11 @@ def curves_png(
 
         canvas.line(x0, y0, x0, y1, BLACK)
         canvas.line(x0, y1, x1, y1, BLACK)
-        canvas.text(x0, base + 6, panel.get("titre", ""), BLACK)
+        canvas.text(x0, base + 4, panel.get("titre", ""), BLACK)
         canvas.text(x1 - 8 * CHAR_WIDTH, y1 + 22, panel.get("x_label", ""), BLACK)
-        canvas.text(x0 - 12, base + 6, panel.get("y_label", ""), BLACK)
+        # Etiquette d'ordonnee calee a gauche de l'axe pour ne pas recouvrir le titre.
+        label = panel.get("y_label", "")
+        canvas.text_right(x0 - 8, y0 - 14, label, BLACK)
 
         for order, serie in enumerate(series):
             color = serie.get("color") or SERIES_COLORS[order % len(SERIES_COLORS)]
