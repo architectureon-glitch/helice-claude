@@ -1,0 +1,20 @@
+{
+  "designation": "pompe centrifuge normalisee EN 733 / ISO 2858, calibre 32-200, roue pleine a 2900 tr/min",
+  "source": "A REMPLACER PAR UNE COURBE CONSTRUCTEUR VERIFIEE. Le point ci-dessous reprend le point de fonctionnement nominal usuellement associe a ce calibre normalise ; il n'a pas pu etre verifie sur un document constructeur depuis l'environnement de developpement, qui n'a pas d'acces reseau. Remplacez 'point_publie' et 'geometrie' par les valeurs relevees sur la fiche technique et la roue reelles, puis relancez : python -m impeller_analyzer.validation --cas-de-reference examples/cas_de_reference.json",
+  "geometrie": {
+    "commentaire": "geometrie de roue typique du calibre, a remplacer par les cotes relevees",
+    "r_1s_m": 0.0275,
+    "r_1h_m": 0.0120,
+    "r_1_m": 0.02122,
+    "r_2_m": 0.1000,
+    "b_2_m": 0.0080,
+    "beta1_deg": 20.0,
+    "beta2_deg": 25.0,
+    "n_blades": 6
+  },
+  "point_publie": {
+    "regime_tr_min": 2900.0,
+    "Q_m3_h": 12.5,
+    "H_m": 50.0
+  }
+}

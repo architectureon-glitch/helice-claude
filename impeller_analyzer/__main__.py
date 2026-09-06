@@ -1,4 +1,4 @@
-"""Permet `python -m impeller_analyzer`."""
+"""Permet `python -m impeller_analyzer` (analyse) et `-m impeller_analyzer.validation`."""
 
 import sys
 

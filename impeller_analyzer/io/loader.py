@@ -354,16 +354,109 @@ def read_brep(path: str) -> TriMesh:
     return TriMesh(vertices_out, faces_out)
 
 
+def _dxf_pairs(path: str):
+    """Couples (code de groupe, valeur) d'un DXF ASCII."""
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        lines = handle.read().splitlines()
+    for index in range(0, len(lines) - 1, 2):
+        raw = lines[index].strip()
+        if not raw.lstrip("-").isdigit():
+            continue
+        yield int(raw), lines[index + 1].strip()
+
+
+def read_dxf_native(path: str) -> TriMesh:
+    """Lit les 3DFACE et les maillages POLYFACE d'un DXF ASCII, sans dependance.
+
+    Ce sont les deux formes sous lesquelles un maillage tesselle sort le plus
+    souvent d'AutoCAD ; les MESH et les 3DSOLID non tesselles demandent `ezdxf`.
+    """
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+
+    entity = ""
+    values: dict[int, str] = {}
+    polyface_vertices: list[tuple[float, float, float]] = []
+    polyface_faces: list[list[int]] = []
+    in_polyface = False
+
+    def flush() -> None:
+        """Traite l'entite qui vient de se terminer."""
+        nonlocal in_polyface
+        if entity == "3DFACE":
+            corners = []
+            for corner in range(4):
+                if 10 + corner not in values:
+                    break
+                corners.append(
+                    (
+                        float(values.get(10 + corner, 0.0)),
+                        float(values.get(20 + corner, 0.0)),
+                        float(values.get(30 + corner, 0.0)),
+                    )
+                )
+            unique = [corners[0]] if corners else []
+            for point in corners[1:]:
+                if point != unique[-1]:
+                    unique.append(point)
+            if len(unique) >= 3:
+                base = len(vertices)
+                vertices.extend(unique)
+                faces.extend(_polygon_to_triangles(list(range(base, base + len(unique)))))
+        elif entity == "POLYLINE":
+            in_polyface = int(values.get(70, "0") or 0) & 64 != 0
+            polyface_vertices.clear()
+            polyface_faces.clear()
+        elif entity == "VERTEX" and in_polyface:
+            flags = int(values.get(70, "0") or 0)
+            if flags & 128 and not flags & 64:
+                indices = [
+                    abs(int(float(values[code]))) for code in (71, 72, 73, 74) if code in values
+                ]
+                polyface_faces.append([i for i in indices if i > 0])
+            else:
+                polyface_vertices.append(
+                    (
+                        float(values.get(10, 0.0)),
+                        float(values.get(20, 0.0)),
+                        float(values.get(30, 0.0)),
+                    )
+                )
+        elif entity == "SEQEND" and in_polyface:
+            base = len(vertices)
+            vertices.extend(polyface_vertices)
+            for polygon in polyface_faces:
+                if len(polygon) >= 3:
+                    faces.extend(
+                        _polygon_to_triangles([base + index - 1 for index in polygon])
+                    )
+            in_polyface = False
+
+    for code, value in _dxf_pairs(path):
+        if code == 0:
+            flush()
+            entity = value.upper()
+            values = {}
+        else:
+            values[code] = value
+    flush()
+
+    if not faces:
+        raise ImportError_(
+            "aucun 3DFACE ni maillage POLYFACE dans ce DXF : installez 'ezdxf' pour lire les "
+            "entites MESH, ou tessellez les 3DSOLID avant export, ou exportez en STL"
+        )
+    return TriMesh(vertices, faces)
+
+
 def read_dxf(path: str) -> TriMesh:
     """Lit les maillages POLYFACE / MESH / 3DSOLID tesselle d'un DXF avec `ezdxf`."""
     try:
         import ezdxf  # type: ignore
-        from ezdxf.render import MeshBuilder  # noqa: F401  (verifie la disponibilite du module)
-    except Exception as exc:  # pragma: no cover - depend de l'environnement
-        raise ImportError_(
-            f"lecture de {os.path.basename(path)} : la bibliotheque 'ezdxf' est requise pour le "
-            "format DXF (pip install ezdxf). A defaut, exportez le modele en STL."
-        ) from exc
+    except Exception:
+        # Sans ezdxf, le lecteur interne couvre les 3DFACE et les POLYFACE, qui
+        # sont les formes les plus courantes d'un maillage tesselle en DXF.
+        return read_dxf_native(path)
     document = ezdxf.readfile(path)
     vertices_out: list[tuple[float, float, float]] = []
     faces_out: list[tuple[int, int, int]] = []
@@ -398,10 +491,7 @@ def read_dxf(path: str) -> TriMesh:
             vertices_out.extend(unique)
             faces_out.extend(_polygon_to_triangles(list(range(base, base + len(unique)))))
     if not faces_out:
-        raise ImportError_(
-            "aucun maillage exploitable dans ce DXF : seuls les MESH, POLYFACE et 3DFACE sont lus. "
-            "Tessellez les 3DSOLID avant export, ou exportez en STL."
-        )
+        return read_dxf_native(path)
     return TriMesh(vertices_out, faces_out)
 
 
@@ -459,7 +549,7 @@ def read_raw(path: str, prefer_trimesh: bool = True) -> tuple[TriMesh, str]:
     if extension in config.EXT_CAD_BREP:
         return read_brep(path), "cadquery"
     if extension in config.EXT_DXF:
-        return read_dxf(path), "ezdxf"
+        return read_dxf(path), "dxf"
     if extension in config.EXT_DWG:
         return read_dwg(path), "oda+ezdxf"
 

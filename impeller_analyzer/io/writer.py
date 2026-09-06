@@ -97,4 +97,30 @@ def write_ply(mesh: TriMesh, path: str, unit_factor: float = config.UNIT_FACTOR,
     return path
 
 
-WRITERS = {".stl": write_stl, ".obj": write_obj, ".off": write_off, ".ply": write_ply}
+def write_dxf(mesh: TriMesh, path: str, unit_factor: float = config.UNIT_FACTOR) -> str:
+    """Ecrit un DXF ASCII contenant un 3DFACE par triangle.
+
+    Forme la plus portable d'un maillage en DXF : elle se relit sans ezdxf.
+    """
+    vertices = _scaled(mesh, unit_factor)
+    out: list[str] = ["0", "SECTION", "2", "ENTITIES"]
+    for i, j, k in mesh.faces:
+        a, b, c = vertices[i], vertices[j], vertices[k]
+        out.extend(["0", "3DFACE", "8", "0"])
+        for corner, point in enumerate((a, b, c, c)):
+            out.extend([str(10 + corner), f"{point[0]:.9g}"])
+            out.extend([str(20 + corner), f"{point[1]:.9g}"])
+            out.extend([str(30 + corner), f"{point[2]:.9g}"])
+    out.extend(["0", "ENDSEC", "0", "EOF"])
+    with open(path, "w", encoding="ascii") as handle:
+        handle.write("\n".join(out) + "\n")
+    return path
+
+
+WRITERS = {
+    ".stl": write_stl,
+    ".obj": write_obj,
+    ".off": write_off,
+    ".ply": write_ply,
+    ".dxf": write_dxf,
+}

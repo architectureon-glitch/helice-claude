@@ -440,6 +440,92 @@ class TriMesh:
         self.invalidate()
         return removed
 
+    def decimate(self, ratio: float) -> "TriMesh":
+        """Copie decimee a environ `ratio` de ses triangles, par effondrement d'aretes.
+
+        Les aretes les plus courtes sont effondrees en premier, ce qui commence
+        par les zones sur-maillees (voisinage de l'axe, petits rayons) et
+        preserve le plus longtemps les aretes qui portent l'epaisseur d'une pale.
+        Un effondrement qui retournerait une face est refuse.
+        """
+        import heapq
+
+        target = max(4, int(len(self.faces) * ratio))
+        vertices = [tuple(v) for v in self.vertices]
+        faces = [tuple(f) for f in self.faces]
+        alive = [True] * len(faces)
+        incident: dict[int, set[int]] = {}
+        for index, face in enumerate(faces):
+            for vertex in face:
+                incident.setdefault(vertex, set()).add(index)
+        parent = list(range(len(vertices)))
+
+        def find(index: int) -> int:
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+
+        heap: list[tuple[float, int, int]] = []
+        seen: set[tuple[int, int]] = set()
+        for face in faces:
+            for a, b in ((face[0], face[1]), (face[1], face[2]), (face[2], face[0])):
+                key = (a, b) if a < b else (b, a)
+                if key in seen:
+                    continue
+                seen.add(key)
+                heapq.heappush(heap, (math.dist(vertices[a], vertices[b]), key[0], key[1]))
+
+        remaining = len(faces)
+        while heap and remaining > target:
+            _, first, second = heapq.heappop(heap)
+            a, b = find(first), find(second)
+            if a == b:
+                continue
+            merged = tuple(0.5 * (vertices[a][k] + vertices[b][k]) for k in range(3))
+            touched = incident[a] | incident[b]
+            flipped = False
+            for index in touched:
+                if not alive[index]:
+                    continue
+                triangle = [find(v) for v in faces[index]]
+                if a in triangle and b in triangle:
+                    continue  # face effondree, pas de retournement a craindre
+                points = [merged if v in (a, b) else vertices[v] for v in triangle]
+                before = cross(sub(vertices[triangle[1]], vertices[triangle[0]]),
+                               sub(vertices[triangle[2]], vertices[triangle[0]]))
+                after = cross(sub(points[1], points[0]), sub(points[2], points[0]))
+                if dot(before, after) <= 0.0:
+                    flipped = True
+                    break
+            if flipped:
+                continue
+
+            parent[b] = a
+            vertices[a] = merged
+            for index in touched:
+                if not alive[index]:
+                    continue
+                triangle = {find(v) for v in faces[index]}
+                if len(triangle) < 3:
+                    alive[index] = False
+                    remaining -= 1
+            incident[a] = {index for index in touched if alive[index]}
+            for neighbour in list(incident[a]):
+                for vertex in faces[neighbour]:
+                    root = find(vertex)
+                    if root != a:
+                        heapq.heappush(
+                            heap, (math.dist(vertices[a], vertices[root]), min(a, root), max(a, root))
+                        )
+                        incident.setdefault(root, set()).add(neighbour)
+
+        kept = [tuple(find(v) for v in faces[i]) for i in range(len(faces)) if alive[i]]
+        result = TriMesh(vertices, kept)
+        result.remove_degenerate_faces()
+        result.remove_unreferenced_vertices()
+        return result
+
     # -- echantillonnage ---------------------------------------------------
     def sample_surface(self, count: int) -> list[Vec3]:
         """Echantillonne `count` points sur la surface, ponderes par l'aire.
