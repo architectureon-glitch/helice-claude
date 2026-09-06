@@ -174,6 +174,8 @@ PLOT_HEIGHT_PX = 800  # px - hauteur des figures produites
 PLOT_MARGIN_PX = 70  # px - marge autour de la zone tracee
 PLOT_TICKS = 6  # - - nombre de graduations par axe
 PLOT_DPI = 96  # px/pouce - resolution declaree dans l'entete PNG
+PLOT_BAND_VIDE = 0.15  # - - position d'affichage du seuil F_VIDE sur l'echelle de couleur
+PLOT_BAND_PLEIN = 0.85  # - - position d'affichage du seuil F_SOLIDE sur l'echelle de couleur
 
 # ---------------------------------------------------------------------------
 # Tolerances de la campagne de validation (SPEC phase 8)
