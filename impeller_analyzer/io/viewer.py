@@ -265,9 +265,21 @@ def build_page(
 ) -> str:
     """Construit la page complete (avec ou sans l'enveloppe HTML)."""
     data = build_payload(result, mesh)
-    body = _TEMPLATE.replace("__DONNEES__", json.dumps(data, ensure_ascii=False, allow_nan=False))
     if title is None:
         title = f"Roue {data['resume']['type']} a {data['resume']['pales']} pales"
+    body = _fill(json.dumps(data, ensure_ascii=False, allow_nan=False), server=False)
+    return _wrap(body, title, standalone)
+
+
+def _fill(payload_json: str, server: bool) -> str:
+    """Injecte la charge utile et le mode dans le gabarit."""
+    return _TEMPLATE.replace("__DONNEES__", payload_json).replace(
+        "__SERVEUR__", "true" if server else "false"
+    )
+
+
+def _wrap(body: str, title: str, standalone: bool) -> str:
+    """Ajoute ou non l'enveloppe HTML complete."""
     if not standalone:
         return f"<title>{title}</title>\n" + body
     return (
@@ -276,6 +288,11 @@ def build_page(
         '<style>html,body{margin:0}img{max-width:100%}</style>\n'
         f"<title>{title}</title>\n</head>\n<body>\n" + body + "\n</body>\n</html>\n"
     )
+
+
+def build_app_page(title: str = "Inspecteur de roue") -> str:
+    """Coquille de l'application locale : la page s'ouvre vide, en attente d'un fichier."""
+    return _wrap(_fill("null", server=True), title, standalone=True)
 
 
 def write_page(
@@ -304,7 +321,7 @@ _TEMPLATE = r"""
   --accent:#0E7C86; --accent-wash:#E4F0F1;
   --oxide:#A9491A; --amber:#8F5E06; --steel:#6E747E;
   --stage:#181B21; --stage-grid:#242932; --stage-ink:#C9CDD4;
-  --ok:#2F6E4F; --warn:#8A5A12;
+  --ok:#2F6E4F; --warn:#8A5A12; --erreur:#A32C1E;
   --rail:22.5rem;
 }
 @media (prefers-color-scheme: dark){
@@ -313,7 +330,7 @@ _TEMPLATE = r"""
     --line:#252A33; --line-strong:#333944;
     --accent:#45B8C2; --accent-wash:#10272B;
     --oxide:#DE7F43; --amber:#E2AA36; --steel:#8B929C;
-    --ok:#5CB68A; --warn:#D9A441;
+    --ok:#5CB68A; --warn:#D9A441; --erreur:#E8705E;
   }
 }
 :root[data-theme="dark"]{
@@ -321,7 +338,7 @@ _TEMPLATE = r"""
   --line:#252A33; --line-strong:#333944;
   --accent:#45B8C2; --accent-wash:#10272B;
   --oxide:#DE7F43; --amber:#E2AA36; --steel:#8B929C;
-  --ok:#5CB68A; --warn:#D9A441;
+  --ok:#5CB68A; --warn:#D9A441; --erreur:#E8705E;
 }
 
 *{box-sizing:border-box}
@@ -337,12 +354,11 @@ body{margin:0}
   font-weight:600; text-transform:uppercase; letter-spacing:.11em; font-size:11px;
   color:var(--ink-faint);
 }
-.num{font-family:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric:tabular-nums}
 
 /* ---- barre de titre ---- */
 .bar{
   display:flex; flex-wrap:wrap; align-items:baseline; gap:.35rem 1.5rem;
-  padding:.9rem 1.25rem; border-bottom:1px solid var(--line); background:var(--panel);
+  padding:.9rem 1.25rem; border-bottom:1px solid var(--line); background:var(--panel); flex:none;
 }
 .bar h1{margin:0; font-size:1.05rem; font-weight:600; letter-spacing:-.01em; text-wrap:balance}
 .bar .file{font-family:"IBM Plex Mono", ui-monospace, monospace; font-size:.78rem; color:var(--ink-soft)}
@@ -371,9 +387,7 @@ main{flex:1; min-height:0; display:grid; grid-template-columns:1fr var(--rail)}
 .stage.no-webgl .fallback{display:grid}
 
 .overlay{position:absolute; color:var(--stage-ink); font-size:.75rem}
-.overlay.tools{
-  top:.75rem; left:.75rem; display:flex; flex-wrap:wrap; gap:.3rem;
-}
+.overlay.tools{top:.75rem; left:.75rem; display:flex; flex-wrap:wrap; gap:.3rem}
 .overlay.legend{bottom:.75rem; left:.75rem; display:grid; gap:.3rem}
 .overlay.hint{bottom:.75rem; right:.75rem; text-align:right; color:#767D87; line-height:1.7}
 .btn{
@@ -383,18 +397,64 @@ main{flex:1; min-height:0; display:grid; grid-template-columns:1fr var(--rail)}
 .btn:hover{background:rgba(255,255,255,.11)}
 .btn:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 .btn[aria-pressed="true"]{background:var(--accent); border-color:var(--accent); color:#062224}
+.btn:disabled{opacity:.45; cursor:default}
 .key{display:flex; align-items:center; gap:.45rem}
 .key .swatch{width:1.1rem; height:0; border-top:2px solid; flex:none}
 .key .box{width:.7rem; height:.7rem; border-radius:1px; flex:none}
 .key label{display:flex; align-items:center; gap:.45rem; cursor:pointer}
 .key input{accent-color:var(--accent); margin:0}
 
+/* ---- panneau d'import ---- */
+.accueil{
+  position:absolute; inset:0; display:grid; place-items:center; padding:1.5rem;
+  background:var(--stage); overflow-y:auto;
+}
+.accueil[hidden]{display:none}
+.depot{
+  width:min(34rem, 100%); background:var(--panel); color:var(--ink);
+  border:1px solid var(--line); border-radius:3px; padding:1.5rem;
+}
+.zone{
+  display:block; position:relative; margin-top:.7rem;
+  border:1.5px dashed var(--line-strong); border-radius:3px; padding:1.6rem 1rem;
+  text-align:center; cursor:pointer; transition:border-color .12s, background .12s;
+}
+.zone:hover, .zone.actif{border-color:var(--accent); background:var(--accent-wash)}
+.zone strong{display:block; font-size:1rem; margin-bottom:.2rem}
+.zone span{color:var(--ink-soft); font-size:.82rem}
+.zone input{position:absolute; width:1px; height:1px; opacity:0; pointer-events:none}
+.champs{display:grid; grid-template-columns:repeat(2, 1fr); gap:.7rem; margin-top:1.1rem}
+.champ{display:grid; gap:.2rem}
+.champ label{font-size:.74rem; color:var(--ink-soft)}
+.champ input, .champ select{
+  font:inherit; font-size:.85rem; font-family:"IBM Plex Mono", ui-monospace, monospace;
+  padding:.34rem .45rem; border:1px solid var(--line-strong); border-radius:2px;
+  background:var(--paper); color:var(--ink); width:100%;
+}
+.champ input:focus-visible, .champ select:focus-visible{outline:2px solid var(--accent); outline-offset:0}
+details{margin-top:.9rem}
+details summary{cursor:pointer; font-size:.8rem; color:var(--accent)}
+details summary:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.lancer{
+  margin-top:1.1rem; width:100%; font:inherit; font-weight:600; font-size:.9rem;
+  padding:.6rem; border:0; border-radius:2px; background:var(--accent); color:#042023; cursor:pointer;
+}
+.lancer:disabled{opacity:.5; cursor:default}
+.etat{margin-top:.8rem; font-size:.82rem; color:var(--ink-soft); min-height:1.2em}
+.etat.erreur{color:var(--erreur)}
+.progres{
+  height:2px; margin-top:.7rem; background:var(--line); overflow:hidden; display:none;
+}
+.progres.actif{display:block}
+.progres i{display:block; height:100%; width:35%; background:var(--accent); animation:glisse 1.1s linear infinite}
+@keyframes glisse{from{transform:translateX(-100%)} to{transform:translateX(390%)}}
+
 /* ---- rail de lecture ---- */
 .rail{border-left:1px solid var(--line); background:var(--panel); overflow-y:auto; min-height:0}
 @media (max-width:960px){ .rail{overflow-y:visible; border-left:0; border-top:1px solid var(--line)} }
 .rail section{padding:1.1rem 1.25rem; border-bottom:1px solid var(--line)}
 .rail section:last-child{border-bottom:0}
-.rail h2{margin:0 0 .7rem; font-size:.95rem; font-weight:600; letter-spacing:-.005em}
+.rail h2{margin:0; font-size:.95rem; font-weight:600; letter-spacing:-.005em}
 .rail .step{display:flex; align-items:baseline; gap:.5rem; margin:0 0 .7rem}
 .rail .step .n{
   font-family:"IBM Plex Mono", monospace; font-size:.7rem; color:var(--accent);
@@ -415,14 +475,15 @@ main{flex:1; min-height:0; display:grid; grid-template-columns:1fr var(--rail)}
 table{width:100%; border-collapse:collapse; font-size:.82rem}
 th,td{text-align:left; padding:.3rem 0; vertical-align:baseline}
 th{font-weight:500; color:var(--ink-soft); font-size:.78rem}
-tbody tr + tr th, tbody tr + tr td{border-top:1px solid var(--line)}
-td.v{font-family:"IBM Plex Mono", ui-monospace, monospace; font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap}
-td.c{text-align:right; color:var(--ink-faint); font-size:.74rem; white-space:nowrap; padding-left:.6rem}
 .scroller{overflow-x:auto}
 .perf th:first-child{width:45%}
-.perf td{font-family:"IBM Plex Mono", ui-monospace, monospace; font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; padding-left:.7rem}
+.perf td{
+  font-family:"IBM Plex Mono", ui-monospace, monospace; font-variant-numeric:tabular-nums;
+  text-align:right; white-space:nowrap; padding-left:.7rem;
+}
 .perf thead th{border-bottom:1px solid var(--line-strong); padding-bottom:.35rem; text-align:right}
 .perf thead th:first-child{text-align:left}
+.perf tbody tr + tr th, .perf tbody tr + tr td{border-top:1px solid var(--line)}
 
 .headline{display:flex; align-items:baseline; gap:.5rem; margin:.2rem 0 .5rem}
 .headline .value{
@@ -436,16 +497,17 @@ td.c{text-align:right; color:var(--ink-faint); font-size:.74rem; white-space:now
 .warnings li::marker{color:var(--warn)}
 .map{width:100%; height:auto; display:block; border:1px solid var(--line); border-radius:2px; background:#fff}
 .caption{margin:.45rem 0 0; font-size:.75rem; color:var(--ink-faint)}
-.uncert{
-  border-left:2px solid var(--oxide); padding:.1rem 0 .1rem .7rem;
-  font-size:.8rem; color:var(--ink-soft);
-}
+.uncert{border-left:2px solid var(--oxide); padding:.1rem 0 .1rem .7rem; font-size:.8rem; color:var(--ink-soft)}
+.fichiers{display:grid; gap:.4rem; margin:0; padding:0; list-style:none; font-size:.82rem}
+.fichiers a{color:var(--accent); text-decoration:none; font-family:"IBM Plex Mono", ui-monospace, monospace}
+.fichiers a:hover{text-decoration:underline}
+.vide{color:var(--ink-soft); font-size:.85rem}
 @media (prefers-reduced-motion:reduce){ *{animation:none !important; transition:none !important} }
 </style>
 
 <div class="app">
   <header class="bar">
-    <h1 id="titre">Roue</h1>
+    <h1 id="titre">Inspecteur de roue</h1>
     <span class="file" id="fichier"></span>
     <div class="verdicts" id="verdicts"></div>
   </header>
@@ -463,6 +525,79 @@ td.c{text-align:right; color:var(--ink-faint); font-size:.74rem; white-space:now
         glisser&nbsp;: pivoter &nbsp;·&nbsp; molette&nbsp;: zoomer<br>
         maj + glisser&nbsp;: deplacer
       </div>
+
+      <div class="accueil" id="accueil" hidden>
+        <form class="depot" id="formulaire">
+          <p class="eyebrow">Importer une roue</p>
+          <label class="zone" id="zone">
+            <strong id="zone-titre">Deposez un fichier 3D ici</strong>
+            <span id="zone-detail">ou cliquez pour le choisir &mdash; .stl, .obj, .ply, .off, .dxf</span>
+            <input type="file" id="fichier-entree" accept=".stl,.obj,.ply,.off,.dxf,.3ds,.step,.stp,.iges,.igs">
+          </label>
+
+          <div class="champs">
+            <div class="champ">
+              <label for="unite">Unite du fichier</label>
+              <select id="unite">
+                <option value="cm" selected>centimetres</option>
+                <option value="mm">millimetres</option>
+                <option value="m">metres</option>
+                <option value="in">pouces</option>
+              </select>
+            </div>
+            <div class="champ">
+              <label for="rpm">Regimes (tr/min)</label>
+              <input id="rpm" value="1000 2000 3000" inputmode="numeric">
+            </div>
+          </div>
+
+          <details>
+            <summary>Reglages avances</summary>
+            <div class="champs">
+              <div class="champ">
+                <label for="r-asp">Rayon d'aspiration (cm)</label>
+                <input id="r-asp" placeholder="detecte" inputmode="decimal">
+              </div>
+              <div class="champ">
+                <label for="pales">Nombre de pales</label>
+                <input id="pales" placeholder="detecte" inputmode="numeric">
+              </div>
+              <div class="champ">
+                <label for="beta1">beta1 (deg)</label>
+                <input id="beta1" placeholder="detecte" inputmode="decimal">
+              </div>
+              <div class="champ">
+                <label for="beta2">beta2 (deg)</label>
+                <input id="beta2" placeholder="detecte" inputmode="decimal">
+              </div>
+              <div class="champ">
+                <label for="temperature">Temperature (&deg;C)</label>
+                <input id="temperature" value="20" inputmode="decimal">
+              </div>
+              <div class="champ">
+                <label for="altitude">Altitude (m)</label>
+                <input id="altitude" value="0" inputmode="decimal">
+              </div>
+              <div class="champ">
+                <label for="hauteur">Hauteur d'aspiration (m)</label>
+                <input id="hauteur" value="0" inputmode="decimal">
+              </div>
+              <div class="champ">
+                <label for="pertes">Pertes d'aspiration (m)</label>
+                <input id="pertes" value="0.5" inputmode="decimal">
+              </div>
+              <div class="champ">
+                <label for="grille">Grille (nr &times; nz)</label>
+                <input id="grille" value="200" inputmode="numeric">
+              </div>
+            </div>
+          </details>
+
+          <button class="lancer" id="lancer" type="submit" disabled>Analyser</button>
+          <div class="progres" id="progres"><i></i></div>
+          <p class="etat" id="etat"></p>
+        </form>
+      </div>
     </section>
 
     <aside class="rail" id="rail"></aside>
@@ -471,38 +606,27 @@ td.c{text-align:right; color:var(--ink-faint); font-size:.74rem; white-space:now
 
 <script>
 "use strict";
-const D = __DONNEES__;
+const BOOT = __DONNEES__;
+const SERVEUR = __SERVEUR__;
 
-/* ---------- decodage de la charge utile ---------- */
+/* ---------- outils ---------- */
+function el(tag, attrs = {}, ...children){
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") node.className = value;
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) if (child !== null && child !== undefined) node.append(child);
+  return node;
+}
 function bytesOf(b64){
   const bin = atob(b64), out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
-const positions = new Float32Array(bytesOf(D.positions).buffer);
-const faceClass = bytesOf(D.classes);
-
-/* Normales plates : une par facette, recopiee sur ses trois sommets. */
-const normals = new Float32Array(positions.length);
-const colors = new Float32Array(positions.length);
-const PALETTE = [[0.42,0.45,0.49], [0.16,0.62,0.67], [0.60,0.55,0.46]];
-for (let f = 0; f < positions.length / 9; f++) {
-  const o = f * 9;
-  const ux = positions[o+3]-positions[o],   uy = positions[o+4]-positions[o+1], uz = positions[o+5]-positions[o+2];
-  const vx = positions[o+6]-positions[o],   vy = positions[o+7]-positions[o+1], vz = positions[o+8]-positions[o+2];
-  let nx = uy*vz-uz*vy, ny = uz*vx-ux*vz, nz = ux*vy-uy*vx;
-  const len = Math.hypot(nx, ny, nz) || 1;
-  nx /= len; ny /= len; nz /= len;
-  const c = PALETTE[faceClass[f]] || PALETTE[2];
-  for (let k = 0; k < 3; k++) {
-    normals[o+k*3] = nx; normals[o+k*3+1] = ny; normals[o+k*3+2] = nz;
-    colors[o+k*3] = c[0]; colors[o+k*3+1] = c[1]; colors[o+k*3+2] = c[2];
-  }
-}
 
 /* ---------- petites matrices 4x4 ---------- */
 const M4 = {
-  identity: () => new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]),
   multiply(a, b){
     const out = new Float32Array(16);
     for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
@@ -554,14 +678,14 @@ void main(){
 const MESH_FS = `#version 300 es
 precision highp float;
 in vec3 v_nrm; in vec3 v_col; in vec3 v_world;
-uniform float u_clip;      /* 0 = pas de coupe ; 1 = demi-coupe */
+uniform float u_clip;
 uniform vec3 u_eye;
 out vec4 fragColor;
 void main(){
   if (u_clip > 0.5 && v_world.y > 0.0) discard;
   vec3 n = normalize(v_nrm);
   vec3 toEye = normalize(u_eye - v_world);
-  if (dot(n, toEye) < 0.0) n = -n;                      /* faces internes de la coupe */
+  if (dot(n, toEye) < 0.0) n = -n;
   float key  = max(dot(n, normalize(vec3(0.45, 0.7, 0.9))), 0.0);
   float fill = max(dot(n, normalize(vec3(-0.6, -0.3, 0.35))), 0.0);
   float rim  = pow(1.0 - max(dot(n, toEye), 0.0), 3.0);
@@ -592,8 +716,16 @@ function program(vs, fs){
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
   return p;
 }
-function buffer(data, prog, name, size){
+let meshProgram = null, lineProgram = null;
+if (gl) {
+  meshProgram = program(MESH_VS, MESH_FS);
+  lineProgram = program(LINE_VS, LINE_FS);
+  gl.enable(gl.DEPTH_TEST);
+  gl.clearColor(0.094, 0.106, 0.129, 1);
+}
+function attach(data, prog, name, size, store){
   const buf = gl.createBuffer();
+  store.push(buf);
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
   const loc = gl.getAttribLocation(prog, name);
@@ -601,40 +733,72 @@ function buffer(data, prog, name, size){
   gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
 }
 
-let meshProgram, lineProgram, meshVao, lineGroups = [];
-if (gl) {
-  meshProgram = program(MESH_VS, MESH_FS);
-  lineProgram = program(LINE_VS, LINE_FS);
-  meshVao = gl.createVertexArray();
-  gl.bindVertexArray(meshVao);
-  buffer(positions, meshProgram, "a_pos", 3);
-  buffer(normals, meshProgram, "a_nrm", 3);
-  buffer(colors, meshProgram, "a_col", 3);
+/* ---------- etat ---------- */
+const PALETTE = [[0.42,0.45,0.49], [0.16,0.62,0.67], [0.60,0.55,0.46]];
+let D = null;
+let scene = null;          /* {vao, count, groups, buffers, vaos} */
+let view = null, home = null, radius = 1;
+let spin = 0, spinning = false, clip = false, last = 0, running = false;
+
+function disposeScene(){
+  if (!gl || !scene) return;
+  for (const buf of scene.buffers) gl.deleteBuffer(buf);
+  for (const vao of scene.vaos) gl.deleteVertexArray(vao);
+  scene = null;
+}
+
+function buildScene(payload){
+  disposeScene();
+  if (!gl) return;
+  const positions = new Float32Array(bytesOf(payload.positions).buffer);
+  const faceClass = bytesOf(payload.classes);
+  const normals = new Float32Array(positions.length);
+  const colors = new Float32Array(positions.length);
+  for (let f = 0; f < positions.length / 9; f++) {
+    const o = f * 9;
+    const ux = positions[o+3]-positions[o],  uy = positions[o+4]-positions[o+1], uz = positions[o+5]-positions[o+2];
+    const vx = positions[o+6]-positions[o],  vy = positions[o+7]-positions[o+1], vz = positions[o+8]-positions[o+2];
+    let nx = uy*vz-uz*vy, ny = uz*vx-ux*vz, nz = ux*vy-uy*vx;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    nx /= len; ny /= len; nz /= len;
+    const c = PALETTE[faceClass[f]] || PALETTE[2];
+    for (let k = 0; k < 3; k++) {
+      normals[o+k*3] = nx; normals[o+k*3+1] = ny; normals[o+k*3+2] = nz;
+      colors[o+k*3] = c[0]; colors[o+k*3+1] = c[1]; colors[o+k*3+2] = c[2];
+    }
+  }
+  const buffers = [], vaos = [];
+  const vao = gl.createVertexArray();
+  vaos.push(vao);
+  gl.bindVertexArray(vao);
+  attach(positions, meshProgram, "a_pos", 3, buffers);
+  attach(normals, meshProgram, "a_nrm", 3, buffers);
+  attach(colors, meshProgram, "a_col", 3, buffers);
   gl.bindVertexArray(null);
 
-  lineGroups = D.overlays.map(group => {
-    const vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
-    buffer(new Float32Array(group.points), lineProgram, "a_pos", 3);
+  const groups = payload.overlays.map(group => {
+    const gvao = gl.createVertexArray();
+    vaos.push(gvao);
+    gl.bindVertexArray(gvao);
+    attach(new Float32Array(group.points), lineProgram, "a_pos", 3, buffers);
     gl.bindVertexArray(null);
     const hex = group.color.replace("#", "");
     return {
-      id: group.id, label: group.label, color: group.color, vao,
+      id: group.id, label: group.label, color: group.color, vao: gvao,
       count: group.points.length / 3, visible: true,
       rgb: [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
     };
   });
-  gl.enable(gl.DEPTH_TEST);
-  gl.clearColor(0.094, 0.106, 0.129, 1);
+  scene = {vao, count: positions.length / 3, groups, buffers, vaos};
 }
 
-/* ---------- camera ---------- */
-const lo = D.bbox.min, hi = D.bbox.max;
-const center = [0, 0, (lo[2] + hi[2]) / 2];
-const radius = Math.max(Math.hypot(hi[0] - lo[0], hi[1] - lo[1]) / 2, (hi[2] - lo[2]) / 2, 1e-3);
-const view = {yaw: -0.9, pitch: 0.5, dist: radius * 3.4, target: center.slice()};
-const HOME = JSON.parse(JSON.stringify(view));
-let spin = 0, spinning = false, clip = false, last = 0;
+function frameCamera(payload){
+  const lo = payload.bbox.min, hi = payload.bbox.max;
+  radius = Math.max(Math.hypot(hi[0]-lo[0], hi[1]-lo[1]) / 2, (hi[2]-lo[2]) / 2, 1e-3);
+  view = {yaw:-0.9, pitch:0.5, dist:radius * 3.4, target:[0, 0, (lo[2] + hi[2]) / 2]};
+  home = {yaw:view.yaw, pitch:view.pitch, dist:view.dist, target:view.target.slice()};
+  spin = 0;
+}
 
 function eyePosition(){
   const cp = Math.cos(view.pitch);
@@ -644,7 +808,6 @@ function eyePosition(){
     view.target[2] + view.dist * Math.sin(view.pitch)
   ];
 }
-
 function resize(){
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
   const w = Math.max(1, Math.round(canvas.clientWidth * ratio));
@@ -653,14 +816,15 @@ function resize(){
 }
 
 function draw(now){
+  requestAnimationFrame(draw);
   if (!gl) return;
   const dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
   last = now;
-  if (spinning) spin += dt * 1.1 * (D.resume.rotation_signe || 1);
-
   resize();
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  if (!scene || !view) return;
+  if (spinning) spin += dt * 1.1 * (D.resume.rotation_signe || 1);
 
   const eye = eyePosition();
   const proj = M4.perspective(Math.PI / 4.2, canvas.width / canvas.height, radius * 0.02, radius * 60);
@@ -672,31 +836,31 @@ function draw(now){
   gl.uniformMatrix4fv(gl.getUniformLocation(meshProgram, "u_model"), false, M4.rotationZ(spin));
   gl.uniform1f(gl.getUniformLocation(meshProgram, "u_clip"), clip ? 1 : 0);
   gl.uniform3fv(gl.getUniformLocation(meshProgram, "u_eye"), new Float32Array(eye));
-  gl.bindVertexArray(meshVao);
-  gl.drawArrays(gl.TRIANGLES, 0, positions.length / 3);
+  gl.bindVertexArray(scene.vao);
+  gl.drawArrays(gl.TRIANGLES, 0, scene.count);
 
   gl.useProgram(lineProgram);
   gl.uniformMatrix4fv(gl.getUniformLocation(lineProgram, "u_proj"), false, proj);
   gl.uniformMatrix4fv(gl.getUniformLocation(lineProgram, "u_view"), false, camera);
   const colorLoc = gl.getUniformLocation(lineProgram, "u_color");
-  for (const group of lineGroups) {
+  for (const group of scene.groups) {
     if (!group.visible) continue;
     gl.uniform3fv(colorLoc, new Float32Array(group.rgb));
     gl.bindVertexArray(group.vao);
     gl.drawArrays(gl.LINES, 0, group.count);
   }
   gl.bindVertexArray(null);
-  requestAnimationFrame(draw);
 }
 
 /* ---------- manipulation ---------- */
 let pointer = null;
 canvas.addEventListener("pointerdown", e => {
-  pointer = {x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button === 1};
+  if (!view) return;
+  pointer = {x:e.clientX, y:e.clientY, pan:e.shiftKey || e.button === 1};
   canvas.setPointerCapture(e.pointerId);
 });
 canvas.addEventListener("pointermove", e => {
-  if (!pointer) return;
+  if (!pointer || !view) return;
   const dx = e.clientX - pointer.x, dy = e.clientY - pointer.y;
   pointer.x = e.clientX; pointer.y = e.clientY;
   if (pointer.pan) {
@@ -709,17 +873,17 @@ canvas.addEventListener("pointermove", e => {
     view.pitch = Math.max(-1.52, Math.min(1.52, view.pitch + dy * 0.008));
   }
 });
-const release = e => { pointer = null; };
+const release = () => { pointer = null; };
 canvas.addEventListener("pointerup", release);
 canvas.addEventListener("pointercancel", release);
 canvas.addEventListener("wheel", e => {
+  if (!view) return;
   e.preventDefault();
   view.dist = Math.max(radius * 0.6, Math.min(radius * 22, view.dist * Math.exp(e.deltaY * 0.0012)));
 }, {passive:false});
-
 let pinch = 0;
 canvas.addEventListener("touchmove", e => {
-  if (e.touches.length !== 2) return;
+  if (e.touches.length !== 2 || !view) return;
   e.preventDefault();
   const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
                        e.touches[0].clientY - e.touches[1].clientY);
@@ -728,32 +892,11 @@ canvas.addEventListener("touchmove", e => {
 }, {passive:false});
 canvas.addEventListener("touchend", () => { pinch = 0; });
 
-/* ---------- interface ---------- */
-function el(tag, attrs = {}, ...children){
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs)) {
-    if (key === "class") node.className = value;
-    else if (key === "html") node.innerHTML = value;
-    else node.setAttribute(key, value);
-  }
-  for (const child of children) node.append(child);
-  return node;
-}
-
-document.getElementById("titre").textContent =
-  "Roue " + D.resume.type + " a " + D.resume.pales + " pales";
-document.getElementById("fichier").textContent = D.nom + " · " + D.faces.toLocaleString("fr-FR") + " triangles";
-
-const verdicts = document.getElementById("verdicts");
-verdicts.append(
-  el("span", {class:"chip"},
-     el("span", {class:"dot", style:"background:var(--amber)"}), "Rotation ", el("b", {}, D.resume.rotation)),
-  el("span", {class:"chip"}, "β1 / β2 ",
-     el("b", {class:"num"}, D.resume.beta1.toFixed(1) + " / " + D.resume.beta2.toFixed(1) + "°")),
-  el("span", {class:"chip"}, "Confiance ", el("b", {}, D.resume.confiance))
-);
-
+/* ---------- barre d'outils ---------- */
 const outils = document.getElementById("outils");
+const accueil = document.getElementById("accueil");
+let spinButton = null;
+
 function toolButton(label, action, pressed){
   const b = el("button", {class:"btn", type:"button"}, label);
   if (pressed !== undefined) b.setAttribute("aria-pressed", String(pressed));
@@ -761,31 +904,32 @@ function toolButton(label, action, pressed){
   outils.append(b);
   return b;
 }
-toolButton("Vue de dessus (+Z)", () => { view.yaw = -Math.PI/2; view.pitch = 1.45; });
-toolButton("Vue de face", () => { view.yaw = -Math.PI/2; view.pitch = 0.06; });
-toolButton("Isometrique", () => { view.yaw = HOME.yaw; view.pitch = HOME.pitch; });
-toolButton("Recadrer", () => { view.dist = HOME.dist; view.target = HOME.target.slice(); });
+toolButton("Vue de dessus (+Z)", () => { if (view) { view.yaw = -Math.PI/2; view.pitch = 1.45; } });
+toolButton("Vue de face", () => { if (view) { view.yaw = -Math.PI/2; view.pitch = 0.06; } });
+toolButton("Isometrique", () => { if (view) { view.yaw = home.yaw; view.pitch = home.pitch; } });
+toolButton("Recadrer", () => { if (view) { view.dist = home.dist; view.target = home.target.slice(); } });
 toolButton("Demi-coupe", b => { clip = !clip; b.setAttribute("aria-pressed", String(clip)); }, false);
-const spinButton = toolButton("Faire tourner", b => {
-  spinning = !spinning; b.setAttribute("aria-pressed", String(spinning));
+spinButton = toolButton("Faire tourner", b => {
+  spinning = !spinning;
+  b.setAttribute("aria-pressed", String(spinning));
   b.textContent = spinning ? "Arreter" : "Faire tourner";
 }, false);
-if (!D.resume.rotation_signe) { spinButton.disabled = true; spinButton.title = "sens de rotation indetermine"; }
-
-const legende = document.getElementById("legende");
-legende.append(
-  el("div", {class:"key"}, el("span", {class:"box", style:"background:#6B737D"}), "moyeu, flasque"),
-  el("div", {class:"key"}, el("span", {class:"box", style:"background:#29A0AB"}), "pales")
-);
-for (const group of lineGroups) {
-  const input = el("input", {type:"checkbox", checked:"checked"});
-  input.addEventListener("change", () => { group.visible = input.checked; });
-  legende.append(el("div", {class:"key"},
-    el("label", {}, input, el("span", {class:"swatch", style:"border-color:" + group.color}), group.label)));
+if (SERVEUR) {
+  toolButton("Changer de roue", () => {
+    spinning = false;
+    spinButton.setAttribute("aria-pressed", "false");
+    spinButton.textContent = "Faire tourner";
+    accueil.hidden = false;
+  });
 }
 
 /* ---------- rail de lecture ---------- */
 const rail = document.getElementById("rail");
+const legende = document.getElementById("legende");
+const titre = document.getElementById("titre");
+const fichierNom = document.getElementById("fichier");
+const verdicts = document.getElementById("verdicts");
+
 function facts(rows){
   const box = el("div", {class:"facts"});
   for (const row of rows) {
@@ -800,47 +944,185 @@ function step(index, title){
   return el("div", {class:"step"}, el("span", {class:"n"}, index), el("h2", {}, title));
 }
 
-const geometry = el("section", {}, step("1", "Geometrie extraite"), facts(D.tables.geometry));
-rail.append(geometry);
+function buildRail(payload){
+  rail.replaceChildren();
+  rail.append(el("section", {}, step("1", "Geometrie extraite"), facts(payload.tables.geometry)));
 
-const head = el("tr", {}, el("th", {}, ""));
-for (const speed of D.tables.speeds) head.append(el("th", {}, speed));
-const perfBody = el("tbody");
-for (const row of D.tables.performance) {
-  const tr = el("tr", {}, el("th", {}, row[0]));
-  for (const value of row.slice(1)) tr.append(el("td", {}, value));
-  perfBody.append(tr);
+  const head = el("tr", {}, el("th", {}, ""));
+  for (const speed of payload.tables.speeds) head.append(el("th", {}, speed));
+  const body = el("tbody");
+  for (const row of payload.tables.performance) {
+    const tr = el("tr", {}, el("th", {}, row[0]));
+    for (const value of row.slice(1)) tr.append(el("td", {}, value));
+    body.append(tr);
+  }
+  rail.append(el("section", {}, step("2", "Performances"),
+    el("div", {class:"scroller"}, el("table", {class:"perf"}, el("thead", {}, head), body))));
+
+  rail.append(el("section", {}, step("3", "Cavitation"),
+    el("p", {class:"eyebrow"}, "Vitesse maximale sans cavitation"),
+    el("div", {class:"headline"},
+       el("span", {class:"value"}, String(payload.resume.vitesse_max)),
+       el("span", {class:"unit"}, "tr/min")),
+    el("p", {class:"note"}, "Limite active : " + payload.resume.limite + "."),
+    el("p", {class:"note"}, payload.resume.hypotheses + ".")));
+
+  if (payload.telechargements && payload.telechargements.length) {
+    const list = el("ul", {class:"fichiers"});
+    for (const item of payload.telechargements) {
+      list.append(el("li", {}, el("a", {href:item.url, download:item.nom}, item.nom)));
+    }
+    rail.append(el("section", {}, el("p", {class:"eyebrow"}, "Rapport complet"), list));
+  }
+
+  if (payload.carte) {
+    rail.append(el("section", {},
+      el("p", {class:"eyebrow"}, "Carte d'occupation f(r, z)"),
+      el("img", {class:"map", src:payload.carte,
+                 alt:"Coupe meridienne de la roue, colorisee selon la fraction angulaire occupee par la matiere"}),
+      el("p", {class:"caption"},
+        "Coupe meridienne : jaune = moyeu et flasque, bande sombre = pales, fond = veine fluide. "
+        + "C'est la lecture dont tout le reste decoule.")));
+  }
+
+  if (payload.avertissements.length) {
+    const list = el("ul", {class:"warnings"});
+    for (const message of payload.avertissements) list.append(el("li", {}, message));
+    rail.append(el("section", {}, el("p", {class:"eyebrow"}, "Avertissements"), list));
+  }
+
+  rail.append(el("section", {}, el("p", {class:"uncert"},
+    "Modele 1D ligne moyenne : hauteur ±18 %, debit ±25 %, NPSHr ±30 %. "
+    + "A verifier par essai sur banc avant toute decision d'achat ou de dimensionnement.")));
 }
-rail.append(el("section", {}, step("2", "Performances"),
-  el("div", {class:"scroller"}, el("table", {class:"perf"}, el("thead", {}, head), perfBody))));
 
-const cavitation = el("section", {}, step("3", "Cavitation"));
-cavitation.append(
-  el("p", {class:"eyebrow"}, "Vitesse maximale sans cavitation"),
-  el("div", {class:"headline"},
-     el("span", {class:"value"}, String(D.resume.vitesse_max)), el("span", {class:"unit"}, "tr/min")),
-  el("p", {class:"note"}, "Limite active : " + D.resume.limite + "."),
-  el("p", {class:"note"}, D.resume.hypotheses + ".")
-);
-rail.append(cavitation);
+function buildLegend(payload){
+  legende.replaceChildren(
+    el("div", {class:"key"}, el("span", {class:"box", style:"background:#6B737D"}), "moyeu, flasque"),
+    el("div", {class:"key"}, el("span", {class:"box", style:"background:#29A0AB"}), "pales")
+  );
+  if (!scene) return;
+  for (const group of scene.groups) {
+    const input = el("input", {type:"checkbox", checked:"checked"});
+    input.addEventListener("change", () => { group.visible = input.checked; });
+    legende.append(el("div", {class:"key"},
+      el("label", {}, input, el("span", {class:"swatch", style:"border-color:" + group.color}), group.label)));
+  }
+}
 
-if (D.carte) {
+function buildHeader(payload){
+  titre.textContent = "Roue " + payload.resume.type + " a " + payload.resume.pales + " pales";
+  fichierNom.textContent = payload.nom + " · " + payload.faces.toLocaleString("fr-FR") + " triangles";
+  verdicts.replaceChildren(
+    el("span", {class:"chip"},
+       el("span", {class:"dot", style:"background:var(--amber)"}), "Rotation ",
+       el("b", {}, payload.resume.rotation)),
+    el("span", {class:"chip"}, "β1 / β2 ",
+       el("b", {}, payload.resume.beta1.toFixed(1) + " / " + payload.resume.beta2.toFixed(1) + "°")),
+    el("span", {class:"chip"}, "Confiance ", el("b", {}, payload.resume.confiance))
+  );
+}
+
+function render(payload){
+  D = payload;
+  spinning = false; clip = false; spin = 0;
+  buildScene(payload);
+  frameCamera(payload);
+  buildHeader(payload);
+  buildLegend(payload);
+  buildRail(payload);
+  for (const b of outils.querySelectorAll("button")) b.setAttribute("aria-pressed", "false");
+  spinButton.textContent = "Faire tourner";
+  spinButton.disabled = !payload.resume.rotation_signe;
+  spinButton.title = payload.resume.rotation_signe ? "" : "sens de rotation indetermine";
+  accueil.hidden = true;
+}
+
+/* ---------- import (mode serveur) ---------- */
+if (SERVEUR) {
+  const zone = document.getElementById("zone");
+  const entree = document.getElementById("fichier-entree");
+  const lancer = document.getElementById("lancer");
+  const etat = document.getElementById("etat");
+  const progres = document.getElementById("progres");
+  const zoneTitre = document.getElementById("zone-titre");
+  const zoneDetail = document.getElementById("zone-detail");
+  let choisi = null;
+
+  function message(texte, erreur){
+    etat.textContent = texte || "";
+    etat.classList.toggle("erreur", Boolean(erreur));
+  }
+  function accepter(file){
+    if (!file) return;
+    choisi = file;
+    zoneTitre.textContent = file.name;
+    zoneDetail.textContent = (file.size / 1048576).toFixed(2) + " Mo — cliquez pour en choisir un autre";
+    lancer.disabled = false;
+    message("");
+  }
+  entree.addEventListener("change", () => accepter(entree.files[0]));
+  for (const type of ["dragenter", "dragover"]) {
+    zone.addEventListener(type, e => { e.preventDefault(); zone.classList.add("actif"); });
+  }
+  for (const type of ["dragleave", "drop"]) {
+    zone.addEventListener(type, e => { e.preventDefault(); zone.classList.remove("actif"); });
+  }
+  zone.addEventListener("drop", e => accepter(e.dataTransfer.files[0]));
+  accueil.addEventListener("dragover", e => e.preventDefault());
+  accueil.addEventListener("drop", e => { e.preventDefault(); accepter(e.dataTransfer.files[0]); });
+
+  function nombre(id){
+    const value = document.getElementById(id).value.trim();
+    return value === "" ? null : value;
+  }
+
+  document.getElementById("formulaire").addEventListener("submit", async e => {
+    e.preventDefault();
+    if (!choisi || running) return;
+    running = true;
+    lancer.disabled = true;
+    progres.classList.add("actif");
+    message("Analyse en cours — quelques secondes selon la finesse du maillage…");
+
+    const params = new URLSearchParams();
+    params.set("nom", choisi.name);
+    params.set("unite", document.getElementById("unite").value);
+    params.set("rpm", document.getElementById("rpm").value.trim());
+    for (const [id, cle] of [["r-asp","r_aspiration"], ["pales","pales"], ["beta1","beta1"],
+                             ["beta2","beta2"], ["temperature","temperature"], ["altitude","altitude"],
+                             ["hauteur","hauteur"], ["pertes","pertes"], ["grille","grille"]]) {
+      const value = nombre(id);
+      if (value !== null) params.set(cle, value);
+    }
+    try {
+      const reponse = await fetch("/analyse?" + params.toString(),
+                                  {method:"POST", body: await choisi.arrayBuffer()});
+      const data = await reponse.json();
+      if (!reponse.ok || data.erreur) throw new Error(data.erreur || "erreur inattendue du serveur");
+      render(data);
+      message("");
+    } catch (error) {
+      message(String(error.message || error), true);
+    } finally {
+      running = false;
+      lancer.disabled = false;
+      progres.classList.remove("actif");
+    }
+  });
+}
+
+/* ---------- demarrage ---------- */
+if (BOOT) {
+  render(BOOT);
+} else {
+  accueil.hidden = false;
   rail.append(el("section", {},
-    el("p", {class:"eyebrow"}, "Carte d'occupation f(r, z)"),
-    el("img", {class:"map", src:D.carte, alt:"Coupe meridienne de la roue, colorisee selon la fraction angulaire occupee par la matiere"}),
-    el("p", {class:"caption"}, "Coupe meridienne : jaune = moyeu et flasque, bande sombre = pales, fond = veine fluide. C'est la lecture dont tout le reste decoule.")));
+    el("p", {class:"eyebrow"}, "Aucune roue chargee"),
+    el("p", {class:"vide"},
+      "Deposez un fichier 3D dans la zone de gauche. L'analyse s'execute sur votre machine, "
+      + "par le meme code que la ligne de commande : rien n'est envoye ailleurs.")));
 }
-
-if (D.avertissements.length) {
-  const list = el("ul", {class:"warnings"});
-  for (const message of D.avertissements) list.append(el("li", {}, message));
-  rail.append(el("section", {}, el("p", {class:"eyebrow"}, "Avertissements"), list));
-}
-
-rail.append(el("section", {},
-  el("p", {class:"uncert"},
-    "Modele 1D ligne moyenne : hauteur ±18 %, debit ±25 %, NPSHr ±30 %. A verifier par essai sur banc avant toute decision d'achat ou de dimensionnement.")));
-
 if (gl) requestAnimationFrame(draw);
 </script>
 """

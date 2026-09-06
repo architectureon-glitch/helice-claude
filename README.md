@@ -25,6 +25,25 @@ calcul. Les formats `.stl`, `.obj`, `.ply`, `.off` et les `.dxf` à `3DFACE` ou
 
 ## Utilisation
 
+### Dans le navigateur
+
+```bash
+python3 -m impeller_analyzer.serve
+```
+
+Le navigateur s'ouvre sur l'application : **déposez votre fichier 3D dans la
+page**, réglez l'unité et les régimes, lancez l'analyse. La roue apparaît en 3D
+et le rapport complet se télécharge depuis le panneau de droite.
+
+Le calcul est en Python : il ne peut pas s'exécuter dans le navigateur. Plutôt
+que d'entretenir une seconde implémentation de la physique en JavaScript — deux
+versions à garder d'accord, dont une sans tests — l'application est servie par
+un petit serveur HTTP de la bibliothèque standard qui appelle **exactement le
+même code que la ligne de commande**. Il n'écoute que sur `127.0.0.1` : le
+fichier déposé ne quitte pas votre poste. `--port` et `--host` si besoin.
+
+### En ligne de commande
+
 ```bash
 python -m impeller_analyzer roue.stl \
     --unit cm \
@@ -76,6 +95,10 @@ Le bouton **Faire tourner** met la roue en rotation dans le sens calculé, et
 sens est énoncé (« vu de +Z, côté aspiration ») : c'est là qu'on vérifie le
 résultat d'un coup d'œil. **Demi-coupe** tranche la roue par un plan passant par
 l'axe et découvre la veine méridienne.
+
+La même vue sert d'interface à l'application locale
+(`python3 -m impeller_analyzer.serve`) : elle s'y ouvre vide, en attente d'un
+fichier, et se remplit sans rechargement à chaque analyse.
 
 `--sans-vue3d` s'en passe si le fichier de sortie vous paraît trop lourd (il
 pèse à peu près la taille du maillage : environ 1 Mo pour 17 000 triangles ;
@@ -208,7 +231,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-135 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+149 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture
@@ -223,6 +246,7 @@ impeller_analyzer/
 ├── analysis.py          # enchaînement des phases 1 à 6
 ├── validation.py        # campagne de la phase 8
 ├── cli.py
+├── serve.py             # application locale : dépôt de fichier dans le navigateur
 ├── io/
 │   ├── loader.py        # lecture multi-format → maillage unifié
 │   ├── repair.py        # orientation des normales, rebouchage

@@ -23,6 +23,12 @@ fournit en centimetres et prime toujours sur la valeur detectee.
 
 Si l'extraction des angles de pale est peu sure, --beta1, --beta2 et --blades
 permettent de les imposer et le reste du calcul se poursuit normalement.
+
+Pour travailler dans le navigateur plutot qu'en ligne de commande :
+
+    python -m impeller_analyzer.serve
+
+deposez la roue dans la page, l'analyse s'execute sur cette machine.
 """
 
 

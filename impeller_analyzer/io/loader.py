@@ -112,6 +112,11 @@ def read_stl(path: str) -> TriMesh:
         head = handle.read(84)
         handle.seek(0)
         payload = handle.read()
+    if len(payload) < 84:
+        raise ImportError_(
+            f"fichier STL inexploitable : {len(payload)} octets, en-tete incomplet. "
+            "Le fichier est tronque, ou ce n'est pas un STL."
+        )
     is_binary = True
     if head[:5].lower().lstrip() .startswith(b"solid"):
         # Un STL ASCII commence par "solid" ; on confirme par la taille attendue.
@@ -523,6 +528,25 @@ def read_dwg(path: str) -> TriMesh:
 # ---------------------------------------------------------------------------
 # Point d'entree
 # ---------------------------------------------------------------------------
+def _guard(reader, path: str) -> TriMesh:
+    """Execute un lecteur en transformant toute erreur d'analyse en message lisible.
+
+    Un fichier tronque ou d'un autre format que son extension ne doit pas
+    remonter une exception de bas niveau : l'utilisateur a besoin de savoir que
+    c'est son fichier qui est en cause, pas l'outil.
+    """
+    try:
+        return reader(path)
+    except ImportError_:
+        raise
+    except (struct.error, ValueError, IndexError, KeyError, UnicodeDecodeError) as error:
+        raise ImportError_(
+            f"{os.path.basename(path)} : contenu illisible pour un fichier "
+            f"{os.path.splitext(path)[1].lower()} ({error}). Le fichier est peut-etre tronque, "
+            "ou son extension ne correspond pas a son contenu."
+        ) from None
+
+
 def read_raw(path: str, prefer_trimesh: bool = True) -> tuple[TriMesh, str]:
     """Lit le fichier sans traitement ; renvoie le maillage brut et le nom du lecteur."""
     if not os.path.isfile(path):
@@ -543,13 +567,13 @@ def read_raw(path: str, prefer_trimesh: bool = True) -> tuple[TriMesh, str]:
                 pass
             except Exception:
                 pass
-        return _NATIVE_READERS[extension](path), "interne"
+        return _guard(_NATIVE_READERS[extension], path), "interne"
     if extension in config.EXT_MESH_TRIMESH_ONLY:
         return read_with_trimesh(path), "trimesh"
     if extension in config.EXT_CAD_BREP:
-        return read_brep(path), "cadquery"
+        return _guard(read_brep, path), "cadquery"
     if extension in config.EXT_DXF:
-        return read_dxf(path), "dxf"
+        return _guard(read_dxf, path), "dxf"
     if extension in config.EXT_DWG:
         return read_dwg(path), "oda+ezdxf"
 

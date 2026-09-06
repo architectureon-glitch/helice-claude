@@ -191,6 +191,14 @@ PLOT_DPI = 96  # px/pouce - resolution declaree dans l'entete PNG
 VIEWER_MAX_FACES = 120000  # triangles - au-dela, le maillage est decime pour la vue 3D
 VIEWER_CIRCLE_SEGMENTS = 128  # segments - finesse des cercles de reperage de la vue 3D
 VIEWER_CLASS_DEPTH = 2.0  # cellules - profondeur de sondage sous une facette pour la classer
+
+# ---------------------------------------------------------------------------
+# Application locale (python -m impeller_analyzer.serve)
+# ---------------------------------------------------------------------------
+SERVER_HOST = "127.0.0.1"  # adresse d'ecoute par defaut : la machine locale seule
+SERVER_PORT = 8765  # port d'ecoute par defaut
+SERVER_MAX_UPLOAD = 250 * 1024 * 1024  # octets - taille maximale d'un fichier depose
+SERVER_HISTORY = 8  # analyses conservees sur disque pour le telechargement des rapports
 PLOT_BAND_VIDE = 0.15  # - - position d'affichage du seuil F_VIDE sur l'echelle de couleur
 PLOT_BAND_PLEIN = 0.85  # - - position d'affichage du seuil F_SOLIDE sur l'echelle de couleur
 
