@@ -1,0 +1,6 @@
+# impeller-analyzer fonctionne avec la seule bibliotheque standard de Python 3.11.
+# Les paquets ci-dessous sont OPTIONNELS : ils elargissent les formats d'import
+# et accelerent la lecture, mais aucun n'est necessaire au calcul.
+trimesh>=4.0     # lecture .3ds et chemin de lecture alternatif pour .stl/.obj/.ply/.off
+cadquery>=2.4    # tessellation des .step / .stp / .iges / .igs
+ezdxf>=1.1       # lecture des maillages .dxf (MESH, POLYFACE, 3DFACE)
