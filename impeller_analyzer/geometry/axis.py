@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from .. import config
 from ..confidence import HIGH, LOW, MEDIUM
-from ..mesh import TriMesh, dot, normalize, rotation_between
+from ..mesh import TriMesh, dot, normalize, rotation_between, rotation_matrix
 from ..numeric import jacobi_eigen
 
 Vec3 = tuple[float, float, float]
@@ -128,3 +128,126 @@ def align_to_z(mesh: TriMesh, result: AxisResult | None = None) -> tuple[TriMesh
     centre = aligned.centroid()
     aligned.apply_translation((-centre[0], -centre[1], -centre[2]))
     return aligned, result
+
+
+#: Reponses possibles a la question « de quel cote aspire cette roue ? ».
+SUCTION_AUTO = "auto"
+SUCTION_PLUS_Z = "+z"
+SUCTION_MINUS_Z = "-z"
+
+
+@dataclass
+class SuctionResult:
+    """Cote par lequel la roue aspire (SPEC 2.1, verification de la convention)."""
+
+    sign: int = 0  # +1 conforme a la convention, -1 maillage a retourner, 0 indetermine
+    asymmetry: float = 0.0  # (rayon moyen en haut - en bas) / rayon exterieur
+    flipped: bool = False
+    forced: bool = False
+    confidence: str = LOW
+    warnings: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        """Vue serialisable en JSON."""
+        return {
+            "signe": self.sign,
+            "asymetrie_radiale": self.asymmetry,
+            "maillage_retourne": self.flipped,
+            "impose_par_l_utilisateur": self.forced,
+            "confiance": self.confidence,
+            "avertissements": list(self.warnings),
+            "remarques": list(self.notes),
+        }
+
+
+def meridional_asymmetry(occupancy, blade_mask=None) -> float:
+    """Asymetrie radiale de la veine entre le haut et le bas de la zone de pales.
+
+    Le rayon moyen des cellules de pales est calcule separement au-dessus et
+    au-dessous du milieu de la zone, pondere par l'element de volume `r dr dz`,
+    puis leur ecart est rapporte au rayon exterieur.  Une roue a composante
+    radiale voit sa veine partir du petit rayon (l'oeillard) vers le grand : la
+    grandeur est nettement negative quand la convention est respectee.  Sur une
+    roue purement axiale elle reste proche de zero, la veine gardant le meme
+    rayon d'un bout a l'autre.
+    """
+    from .topology import clean_blade_mask
+
+    if blade_mask is None:
+        blade_mask = clean_blade_mask(occupancy.blade_mask())
+    rows = [iz for iz in range(occupancy.nz) if any(blade_mask[iz])]
+    if not rows or occupancy.r_max <= 0.0:
+        return 0.0
+    middle = 0.5 * (occupancy.z_centres[rows[0]] + occupancy.z_centres[rows[-1]])
+    sums = [0.0, 0.0]
+    weights = [0.0, 0.0]
+    for iz in rows:
+        side = 0 if occupancy.z_centres[iz] > middle else 1
+        for ir in range(occupancy.nr):
+            if not blade_mask[iz][ir]:
+                continue
+            radius = occupancy.r_centres[ir]
+            sums[side] += radius * radius
+            weights[side] += radius
+    if weights[0] <= 0.0 or weights[1] <= 0.0:
+        return 0.0
+    return (sums[0] / weights[0] - sums[1] / weights[1]) / occupancy.r_max
+
+
+def detect_suction_side(occupancy, forced: str = SUCTION_AUTO) -> SuctionResult:
+    """Determine si la roue aspire bien vers +Z, comme la convention l'impose.
+
+    Un fichier issu d'un logiciel de CAO n'a aucune raison de respecter cette
+    convention : une roue exportee a l'envers voit son plan d'aspiration lu du
+    cote du refoulement, ce qui la fait passer pour axiale et lui donne un sens
+    de sortie faux.  Sur une roue centrifuge ou mixte l'ambiguite se leve sans
+    rien demander a l'utilisateur ; sur une roue axiale elle ne se leve pas, et
+    la convention est alors conservee telle quelle.
+    """
+    result = SuctionResult()
+    result.asymmetry = meridional_asymmetry(occupancy)
+
+    if forced == SUCTION_PLUS_Z:
+        result.sign, result.forced, result.confidence = 1, True, HIGH
+        result.notes.append("cote aspiration impose vers +Z par l'utilisateur")
+        return result
+    if forced == SUCTION_MINUS_Z:
+        result.sign, result.forced, result.confidence = -1, True, HIGH
+        result.flipped = True
+        result.notes.append("cote aspiration impose vers -Z : le maillage est retourne")
+        return result
+
+    if abs(result.asymmetry) < config.SUCTION_ASYMMETRY_MIN:
+        result.sign = 0
+        result.confidence = LOW
+        result.notes.append(
+            f"veine de rayon constant (asymetrie {result.asymmetry:+.3f}) : le cote aspiration "
+            "ne se deduit pas de la geometrie, la convention +Z est conservee. C'est le cas "
+            "normal d'une helice axiale ; si la roue est montee a l'envers, utilisez "
+            "--aspiration -z"
+        )
+        return result
+
+    result.confidence = HIGH
+    if result.asymmetry < 0.0:
+        result.sign = 1
+        result.notes.append(
+            f"la veine s'ecarte de l'axe vers -Z (asymetrie {result.asymmetry:+.3f}) : "
+            "l'aspiration est bien du cote +Z, conforme a la convention"
+        )
+    else:
+        result.sign = -1
+        result.flipped = True
+        result.warnings.append(
+            f"la veine s'ecarte de l'axe vers +Z (asymetrie {result.asymmetry:+.3f}) : la roue "
+            "est fournie a l'envers, aspiration du cote -Z. Le maillage est retourne pour "
+            "respecter la convention ; sens de rotation et sens de sortie sont donnes dans "
+            "le repere corrige"
+        )
+    return result
+
+
+def flip_axis(mesh: TriMesh) -> TriMesh:
+    """Retourne le maillage bout pour bout : demi-tour autour de X."""
+    return mesh.transformed(matrix=rotation_matrix((1.0, 0.0, 0.0), math.pi))

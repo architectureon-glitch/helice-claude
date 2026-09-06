@@ -68,6 +68,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--beta1", type=float, default=None, metavar="DEG", help="angle de pale d'entree impose")
     parser.add_argument("--beta2", type=float, default=None, metavar="DEG", help="angle de pale de sortie impose")
     parser.add_argument(
+        "--aspiration", choices=["auto", "+z", "-z"], default="auto",
+        help=(
+            "cote par lequel la roue aspire (defaut : auto, deduit de la geometrie ; "
+            "sur une roue axiale la deduction est impossible et la convention +Z est gardee)"
+        ),
+    )
+    parser.add_argument(
         "--temperature", type=float, default=config.TEMPERATURE, metavar="C",
         help="temperature du liquide, en degres Celsius (defaut : %(default)s)",
     )
@@ -113,6 +120,7 @@ def options_from_args(args: argparse.Namespace) -> Options:
         blades=args.blades,
         beta1_deg=args.beta1,
         beta2_deg=args.beta2,
+        suction=args.aspiration,
         altitude=args.altitude,
         temperature_c=args.temperature,
         suction_height=args.hauteur_aspiration,

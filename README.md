@@ -60,6 +60,7 @@ utiles au quotidien :
 |---|---|
 | `--unit` | unité du fichier (défaut `cm`), ou un facteur vers le mètre |
 | `--r-aspiration` | rayon d'aspiration imposé, en cm ; **prime toujours** sur la détection |
+| `--aspiration` | `auto` (défaut), `+z` ou `-z` : quel bout du maillage est le côté aspiration ; force la détection décrite plus bas |
 | `--blades`, `--beta1`, `--beta2` | repli manuel quand l'extraction est peu sûre |
 | `--altitude`, `--temperature`, `--hauteur-aspiration`, `--pertes-aspiration` | hypothèses d'installation, qui fixent le NPSH disponible |
 | `--grille NR NZ`, `--secteurs N` | finesse de la carte d'occupation |
@@ -117,6 +118,41 @@ correctement une roue livrée comme **union de solides qui s'interpénètrent**
 
 Tout le reste s'en déduit : `f ≥ 0.98` est du moyeu ou du flasque, `f ≤ 0.02` de
 la veine fluide, l'entre-deux est la zone de pales.
+
+### Quel bout du maillage est l'aspiration
+
+La SPEC pose la convention « axe = Z, aspiration vers +Z », mais un fichier
+sorti d'un logiciel de CAO n'a aucune raison de la respecter. Une roue exportée
+à l'envers est alors lue depuis son refoulement : sa veine paraît converger vers
+l'axe, l'outil la classe *axiale* et lui donne un sens de sortie faux — sur une
+roue de pompe, qui aspire par le centre et refoule **latéralement**, l'erreur
+est franche.
+
+L'orientation se tranche donc sur la géométrie, sans rien demander. Le rayon
+moyen des cellules de pales est calculé séparément dans la moitié haute et la
+moitié basse de la zone, pondéré par `r dr dz`, et leur écart rapporté au rayon
+extérieur donne une **asymétrie méridienne** : négative quand la veine part du
+petit rayon (l'ouïe) vers le grand, c'est-à-dire quand la convention est
+respectée. Au-delà de `SUCTION_ASYMMETRY_MIN` la conclusion est `high` ; si
+l'asymétrie est positive, le maillage est retourné d'un demi-tour autour de X et
+toute l'analyse reprend sur le maillage corrigé — sens de rotation et sens de
+sortie sont donnés dans le repère corrigé, et un avertissement le signale.
+
+Sur une hélice axiale la veine garde le même rayon d'un bout à l'autre :
+l'asymétrie reste proche de zéro, la question ne se tranche pas, la convention
++Z est conservée et la confiance descend à `low`. `--aspiration +z|-z` impose
+alors la réponse.
+
+### Le rayon de sortie est celui des pales, pas de la matière
+
+Une roue de pompe semi-ouverte est ouverte à l'avant et **fermée au dos** : les
+pales sont portées par un disque arrière qui les déborde souvent de plusieurs
+millimètres. Prendre `r2` sur le rayon de matière compte ce débord comme de la
+pale — sur la roue d'essai, 104,65 mm au lieu de 89,95 mm, soit 16 % sur `u2` et
+près de 35 % sur la hauteur. `r_tip` (matière) et `r_blade_tip` (pales) sont donc
+deux grandeurs distinctes ; `r1s`, `r2s`, `b2` et le rapport `r2/r1s` se lisent
+tous sur le masque de pales, et le rapport de matière n'est plus qu'une
+indication reportée telle quelle.
 
 ## Écarts assumés par rapport à la SPEC
 
@@ -231,7 +267,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-149 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+161 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture
@@ -255,7 +291,7 @@ impeller_analyzer/
 │   ├── viewer.py        # vue 3D WebGL autonome, en un fichier
 │   └── report.py        # resultats.json, rapport.md, courbes.png
 ├── geometry/
-│   ├── axis.py          # détection de l'axe, recentrage
+│   ├── axis.py          # détection de l'axe, recentrage, côté aspiration
 │   ├── occupancy.py     # carte f(r, z) — cœur du système
 │   ├── topology.py      # pales, rayons, type de roue, sections
 │   ├── proximity.py     # distance point-maillage, Hausdorff

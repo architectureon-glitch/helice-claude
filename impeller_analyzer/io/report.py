@@ -234,6 +234,14 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
             f"{report.extents_mm[2]:.1f} mm"
         )
         lines.append(f"- volume : {report.volume_m3 * config.CM3_PER_M3:.1f} cm3, etanche : {report.watertight}")
+        if result.suction is not None:
+            side = {1: "vers +Z, conforme a la convention", -1: "vers -Z : le maillage a ete retourne"}.get(
+                result.suction.sign, "indetermine, convention +Z conservee"
+            )
+            lines.append(
+                f"- cote aspiration : {side} (asymetrie radiale de la veine "
+                f"{result.suction.asymmetry:+.3f})"
+            )
         lines.append(f"- duree d'analyse : {result.elapsed_s:.1f} s")
         lines.append("")
 

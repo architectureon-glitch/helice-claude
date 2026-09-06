@@ -211,7 +211,7 @@ def section_surfaces(
     """
     if topology.machine_type != CENTRIFUGAL:
         r_low = topology.r_1h if topology.r_1h > 0.0 else occupancy.r_centres[0]
-        r_high = topology.r_tip
+        r_high = topology.r_blade_tip or topology.r_tip
         margin = config.SECTION_MARGIN * (r_high - r_low)
         z_low, z_high = occupancy.z_min, occupancy.z_max
         surfaces = []

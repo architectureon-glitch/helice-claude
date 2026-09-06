@@ -38,6 +38,7 @@ class Options:
     temperature_c: float = config.TEMPERATURE
     suction_height: float = config.HAUTEUR_ASPIRATION
     suction_losses: float = config.PERTES_ASPIRATION
+    suction: str = axis_module.SUCTION_AUTO
     grid_nr: int = config.GRID_NR
     grid_nz: int = config.GRID_NZ
     n_theta: int = config.N_THETA
@@ -54,6 +55,7 @@ class Options:
             "pales_imposees": self.blades,
             "beta1_impose_deg": self.beta1_deg,
             "beta2_impose_deg": self.beta2_deg,
+            "cote_aspiration": self.suction,
             "altitude_m": self.altitude,
             "temperature_C": self.temperature_c,
             "hauteur_aspiration_m": self.suction_height,
@@ -71,6 +73,7 @@ class AnalysisResult:
     options: Options = field(default_factory=Options)
     import_report: loader.ImportReport | None = None
     axis: axis_module.AxisResult | None = None
+    suction: axis_module.SuctionResult | None = None
     occupancy: occupancy_module.OccupancyMap | None = None
     topology: topology_module.Topology | None = None
     blades: blade_module.BladeGeometry | None = None
@@ -96,6 +99,7 @@ class AnalysisResult:
             "entrees": self.options.to_dict(),
             "import": self.import_report.to_dict() if self.import_report else None,
             "axe": self.axis.to_dict() if self.axis else None,
+            "cote_aspiration": self.suction.to_dict() if self.suction else None,
             "carte_d_occupation": self.occupancy.summary() if self.occupancy else None,
             "topologie": self.topology.to_dict() if self.topology else None,
             "pales": self.blades.to_dict() if self.blades else None,
@@ -143,6 +147,21 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     occupancy = occupancy_module.build_occupancy(
         aligned, nr=options.grid_nr, nz=options.grid_nz, n_theta=options.n_theta
     )
+
+    # La convention impose l'aspiration vers +Z, mais un fichier de CAO n'a
+    # aucune raison de la respecter : une roue exportee a l'envers serait lue
+    # depuis son cote refoulement, passerait pour axiale et recevrait un sens de
+    # sortie faux. Sur une roue a composante radiale la geometrie tranche seule.
+    suction = axis_module.detect_suction_side(occupancy, options.suction)
+    result.suction = suction
+    if suction.flipped:
+        aligned = axis_module.flip_axis(aligned)
+        result.mesh = aligned
+        occupancy = occupancy_module.build_occupancy(
+            aligned, nr=options.grid_nr, nz=options.grid_nz, n_theta=options.n_theta
+        )
+    result.warnings.extend(suction.warnings)
+    result.confidence.set("cote_aspiration", suction.confidence)
     result.occupancy = occupancy
 
     # Phase 3 : topologie.

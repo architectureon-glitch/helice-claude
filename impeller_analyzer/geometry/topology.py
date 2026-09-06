@@ -51,7 +51,8 @@ class Topology:
     """Rayons caracteristiques, type de roue et section de sortie (SPEC 3.2 a 3.4)."""
 
     blades: BladeCount = field(default_factory=BladeCount)
-    r_tip: float = 0.0
+    r_tip: float = 0.0  # rayon exterieur de la matiere (flasque compris)
+    r_blade_tip: float = 0.0  # rayon exterieur des pales
     z_1: float = 0.0
     r_1s: float = 0.0
     r_1h: float = 0.0
@@ -78,6 +79,7 @@ class Topology:
             "type_de_roue": self.machine_type,
             "roue_fermee": self.closed_impeller,
             "r_tip_m": self.r_tip,
+            "r_tip_pales_m": self.r_blade_tip,
             "z_1_m": self.z_1,
             "r_1s_m": self.r_1s,
             "r_1h_m": self.r_1h,
@@ -208,6 +210,14 @@ def _outer_index(row: list[float]) -> int:
     return -1
 
 
+def _blade_outer_index(blade_row: list[bool], row: list[float]) -> int:
+    """Plus grand index radial occupe par une pale ; a defaut, par de la matiere."""
+    for ir in range(len(blade_row) - 1, -1, -1):
+        if blade_row[ir]:
+            return ir
+    return _outer_index(row)
+
+
 def _shroud_present(row: list[float]) -> bool:
     """Vrai si du plein reapparait au-dela d'une cellule de pale (flasque avant)."""
     seen_blade = False
@@ -280,7 +290,7 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
         topology.confidence.set("type_de_roue", LOW)
         return topology
 
-    # Rayon exterieur : plus grande colonne portant de la matiere.
+    # Rayon exterieur de la matiere : c'est le diametre hors tout de la piece.
     r_tip_index = 0
     for ir in range(nr - 1, -1, -1):
         if any(occupancy.f[iz][ir] > config.F_VIDE for iz in range(nz)):
@@ -288,13 +298,27 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
             break
     topology.r_tip = occupancy.r_centres[r_tip_index]
 
+    # Rayon exterieur des **pales**, qui n'est pas le meme : sur une roue semi
+    # ouverte le disque arriere deborde souvent les aubes, et sur une roue
+    # fermee le flasque avant aussi. C'est le rayon des pales qui fixe u2, donc
+    # la hauteur ; le prendre sur la matiere surestimerait les performances.
+    blade_tip_index = 0
+    for ir in range(nr - 1, -1, -1):
+        if any(blade[iz][ir] for iz in range(nz)):
+            blade_tip_index = ir
+            break
+    topology.r_blade_tip = occupancy.r_centres[blade_tip_index] or topology.r_tip
+
     iz_1 = blade_rows[-1]  # bord d'attaque : z maximal de la zone de pales
     iz_2 = blade_rows[0]  # bord de fuite : z minimal
     topology.z_1 = occupancy.z_centres[iz_1]
     topology.z_2 = occupancy.z_centres[iz_2]
 
+    # r_1s et r_2s sont les rayons exterieurs **des pales**, pas de la matiere :
+    # sur une roue fermee, le flasque avant s'etend bien au-dela des pales au
+    # plan d'aspiration, et le compter donnerait un rayon d'oeillard trop grand.
     row_1 = occupancy.f[iz_1]
-    outer_1 = _outer_index(row_1)
+    outer_1 = _blade_outer_index(blade[iz_1], row_1)
     hub_1 = _hub_index(row_1)
     topology.r_1s = occupancy.r_centres[outer_1] if outer_1 >= 0 else topology.r_tip
     topology.r_1h = occupancy.r_centres[hub_1] if hub_1 >= 0 else 0.0
@@ -302,7 +326,7 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
     topology.r_aspiration = topology.r_1s
 
     row_2 = occupancy.f[iz_2]
-    outer_2 = _outer_index(row_2)
+    outer_2 = _blade_outer_index(blade[iz_2], row_2)
     hub_2 = _hub_index(row_2)
     topology.r_2s = occupancy.r_centres[outer_2] if outer_2 >= 0 else topology.r_tip
     topology.r_2h = occupancy.r_centres[hub_2] if hub_2 >= 0 else 0.0
@@ -315,7 +339,7 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
     # definition commune aux trois familles : pour une roue axiale le bord de
     # fuite est au meme rayon que le bord d'attaque, pour une centrifuge il est
     # au rayon exterieur de la roue.
-    topology.ratio_r2_r1s = topology.r_tip / topology.r_1s if topology.r_1s > 0.0 else 0.0
+    topology.ratio_r2_r1s = topology.r_blade_tip / topology.r_1s if topology.r_1s > 0.0 else 0.0
     if topology.ratio_r2_r1s < config.R_RATIO_AXIAL_MAX:
         topology.machine_type = AXIAL
     elif topology.ratio_r2_r1s < config.R_RATIO_MIXED_MAX:
@@ -326,12 +350,9 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
     # 3.4 Sections.
     topology.area_1 = math.pi * (topology.r_1s ** 2 - topology.r_1h ** 2) * config.TAU_1
     if topology.machine_type == CENTRIFUGAL:
-        topology.r_2 = topology.r_tip
-        column = occupancy.radial_index(config.B2_RADIUS_FRACTION * topology.r_tip)
-        heights = [
-            occupancy.z_centres[iz] for iz in range(nz)
-            if occupancy.f[iz][column] > config.F_VIDE
-        ]
+        topology.r_2 = topology.r_blade_tip
+        column = occupancy.radial_index(config.B2_RADIUS_FRACTION * topology.r_blade_tip)
+        heights = [occupancy.z_centres[iz] for iz in range(nz) if blade[iz][column]]
         topology.b_2 = (max(heights) - min(heights) + occupancy.dz) if heights else occupancy.dz
         topology.area_2 = 2.0 * math.pi * topology.r_2 * topology.b_2 * config.TAU_2
     else:
@@ -386,7 +407,7 @@ def apply_user_suction_radius(topology: Topology, r_aspiration_cm: float | None)
     topology.r_1s = value
     topology.r_1 = math.sqrt((topology.r_1s ** 2 + topology.r_1h ** 2) / 2.0)
     topology.area_1 = math.pi * (topology.r_1s ** 2 - topology.r_1h ** 2) * config.TAU_1
-    topology.ratio_r2_r1s = topology.r_tip / topology.r_1s
+    topology.ratio_r2_r1s = topology.r_blade_tip / topology.r_1s
     topology.confidence.set("rayons", HIGH)
     return topology
 

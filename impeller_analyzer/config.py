@@ -87,6 +87,7 @@ FFT_RATIO_MEDIUM = 1.5  # - - en deca de ce rapport la detection tombe en confia
 AXIS_TOL = 0.05  # - - tolerance d'egalite relative des valeurs propres d'inertie (SPEC 2.1)
 SYM_TOL = 0.02  # - - distance de Hausdorff relative admise apres rotation de 2*pi/N (SPEC 3.1)
 AXIS_WARN_DEG = 5.0  # degres - ecart axe detecte / Z au-dela duquel on avertit et on realigne (SPEC 2.1)
+SUCTION_ASYMMETRY_MIN = 0.05  # - - asymetrie radiale minimale de la veine pour trancher le cote aspiration
 HAUSDORFF_SAMPLES = 4000  # points - echantillonnage du maillage pour la distance de Hausdorff
 PROXIMITY_CELLS = 32  # cellules - resolution du hachage spatial des triangles (plus grande dimension)
 BLADE_ROW_MIN_CELLS = 1  # cellules - occupation minimale d'une ligne pour compter dans la zone de pales

@@ -325,6 +325,7 @@ def centrifugal_impeller(
     thickness: float = 0.004,
     edge_taper: float = 0.0,
     sense: int = 1,
+    front_shroud: bool = False,
     shroud_thickness: float = 0.006,
     n_radial: int = 20,
     n_span: int = 5,
@@ -336,6 +337,10 @@ def centrifugal_impeller(
     +Z) au plan de sortie z = 0, et sa largeur passe de `b1` a `b2` : le maximum
     de z de la zone de pales est donc bien atteint au rayon d'oeillard `r1`, et
     le rapport `r2 / r1s` classe la roue (SPEC 3.2 et 3.3).
+
+    `front_shroud` ajoute le flasque avant : la roue devient **fermee**, la
+    veine est entierement enclose entre les deux flasques et seul l'oeillard
+    reste ouvert. C'est la forme la plus repandue des roues de pompe.
     """
 
     def z_hi(r: float) -> float:
@@ -367,6 +372,18 @@ def centrifugal_impeller(
         profile.append((r, z_lo(r)))
     profile.append((0.0, z_lo(r1)))
     parts = [revolve(profile, hub_segments)]
+
+    if front_shroud:
+        # Flasque avant : solide de revolution pose sur le dessus de la veine,
+        # de l'oeillard au diametre exterieur.
+        top: list[tuple[float, float]] = []
+        for i in range(n_radial):
+            r = r1 + (r2 - r1) * i / (n_radial - 1)
+            top.append((r, z_hi(r)))
+        for i in range(n_radial - 1, -1, -1):
+            r = r1 + (r2 - r1) * i / (n_radial - 1)
+            top.append((r, z_hi(r) + shroud_thickness))
+        parts.append(revolve(top, hub_segments))
 
     def half_angle_at(r: float) -> float:
         """Demi-epaisseur angulaire de l'aube au rayon r.
