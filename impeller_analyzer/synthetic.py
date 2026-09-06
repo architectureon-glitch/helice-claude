@@ -187,14 +187,44 @@ def axial_blade_surface(
     sense: int,
     theta_0: float,
     z_center: float,
+    beta2_deg: float | None = None,
+    wrap: float | None = None,
+    steps: int = 200,
 ) -> float:
-    """Cote z de la nappe moyenne d'une pale a angle de pale constant.
+    """Cote z de la nappe moyenne d'une pale d'helice.
 
-    `z = z_center + sense * r * tan(beta) * (theta - theta_0)` : par
-    construction `tan(beta) = dz / (r dtheta)` a tout rayon, donc l'angle de pale
-    vaut exactement `beta_deg` partout (SPEC 4.3).
+    A angle de pale constant, `z = z_center + sense * r * tan(beta) *
+    (theta - theta_0)` : par construction `tan(beta) = dz / (r dtheta)` a tout
+    rayon, donc l'angle vaut exactement `beta_deg` partout (SPEC 4.3).
+
+    Si `beta2_deg` est fourni, l'angle varie lineairement le long de la corde,
+    de `beta_deg` au bord d'attaque (cote z maximal, donc aspiration) a
+    `beta2_deg` au bord de fuite, et la cote est integree numeriquement.  Une
+    helice a angle constant ne devie pas le fluide et ne fournit aucune hauteur
+    d'Euler : c'est le cas de reference pour l'extraction geometrique, pas pour
+    le calcul hydraulique.
     """
-    return z_center + sense * r * math.tan(math.radians(beta_deg)) * (theta - theta_0)
+    if beta2_deg is None or wrap is None:
+        return z_center + sense * r * math.tan(math.radians(beta_deg)) * (theta - theta_0)
+
+    # L'integration part du milieu de corde : la nappe est ainsi centree sur
+    # z_center a tout rayon, comme dans le cas a angle constant. Integrer depuis
+    # le bord de fuite donnerait au contraire un bord de fuite plan, ce qui
+    # deplacerait le plan de sortie detecte par la phase 3.
+    total = 0.0
+    span = theta - theta_0
+    count = max(2, int(steps * abs(span) / wrap)) if wrap > 0.0 else 2
+    for index in range(count):
+        a = theta_0 + span * index / count
+        b = theta_0 + span * (index + 1) / count
+        middle = 0.5 * (a + b)
+        # Fraction de corde comptee depuis le bord d'attaque, situe du cote
+        # ou z est maximal (theta croissant pour sense = +1).
+        fraction = (theta_0 + wrap / 2.0 - middle) / wrap
+        fraction = max(0.0, min(1.0, fraction))
+        beta = math.radians(beta_deg + (beta2_deg - beta_deg) * fraction)
+        total += (b - a) * math.tan(beta)
+    return z_center + sense * r * total
 
 
 def axial_impeller(
@@ -203,6 +233,7 @@ def axial_impeller(
     r_hub: float = 0.030,
     r_tip: float = 0.100,
     blade_wrap_deg: float = 60.0,
+    beta2_deg: float | None = None,
     thickness: float = 0.004,
     sense: int = 1,
     hub_margin: float = 0.010,
@@ -214,10 +245,15 @@ def axial_impeller(
 
     `sense = +1` donne `k = dz/dtheta > 0`, donc une rotation attendue
     anti-horaire vue de +Z ; `sense = -1` donne l'inverse (SPEC 4.4).
+
+    `beta2_deg` fait varier l'angle de pale du bord d'attaque au bord de fuite :
+    c'est ce qui donne a l'helice une hauteur d'Euler non nulle, une helice a
+    angle constant ne deviant pas le fluide.
     """
     wrap = math.radians(blade_wrap_deg)
     half_t = thickness / 2.0
-    z_extent = r_tip * math.tan(math.radians(beta_deg)) * wrap / 2.0
+    reference = max(beta_deg, beta2_deg if beta2_deg is not None else beta_deg)
+    z_extent = r_tip * math.tan(math.radians(reference)) * wrap
     hub_half = z_extent + half_t + hub_margin
     parts = [cylinder(r_hub, 2.0 * hub_half, hub_segments, 0.0)]
 
@@ -232,7 +268,9 @@ def axial_impeller(
             row_high: list[Vec3] = []
             for j in range(n_chord):
                 theta = theta_0 - wrap / 2.0 + wrap * j / (n_chord - 1)
-                z_mid = axial_blade_surface(r, theta, beta_deg, sense, theta_0, 0.0)
+                z_mid = axial_blade_surface(
+                    r, theta, beta_deg, sense, theta_0, 0.0, beta2_deg, wrap
+                )
                 x, y = r * math.cos(theta), r * math.sin(theta)
                 row_low.append((x, y, z_mid - half_t))
                 row_high.append((x, y, z_mid + half_t))
