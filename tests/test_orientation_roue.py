@@ -105,6 +105,37 @@ class TestShroudedGeometry(BaseTestCase):
         # r_1s est le rayon des pales au plan d'aspiration, pas celui du flasque.
         self.assertClose(result.r_1s, 0.035, rel=config.VALID_GEOM_TOL)
 
+    def test_flasque_plat_l_oeillard_fixe_le_rayon_d_aspiration(self):
+        """Quand les pales courent sous le flasque, r_1s est le percement, pas leur bout."""
+        roue = synthetic.centrifugal_impeller(
+            front_shroud=True, flat_shroud=True, r1=0.035, r2=0.090
+        )
+        _, occupancy = occupancy_of(roue)
+        result = topo.characteristic_radii(occupancy)
+        self.assertTrue(result.closed_impeller)
+
+        # Au plan d'entree les aubes vont d'un bord a l'autre : les lire donnerait
+        # le rayon exterieur de la roue, soit deux fois et demie le bon rayon.
+        blade = topo.clean_blade_mask(occupancy.blade_mask())
+        rows = [
+            iz for iz in range(occupancy.nz)
+            if sum(1 for cell in blade[iz] if cell) >= config.BLADE_ROW_MIN_CELLS
+        ]
+        sur_les_pales = occupancy.r_centres[topo._blade_outer_index(blade[rows[-1]], occupancy.f[rows[-1]])]
+        self.assertClose(sur_les_pales, 0.090, rel=0.02)
+
+        self.assertClose(result.r_1s, 0.035, rel=config.VALID_GEOM_TOL)
+        self.assertClose(result.r_2, 0.090, rel=config.VALID_GEOM_TOL)
+        self.assertEqual(result.machine_type, topo.CENTRIFUGAL)
+        self.assertEqual(result.warnings, [])
+
+    def test_flasque_conique_l_oeillard_reste_au_bord_d_attaque(self):
+        """Sur un flasque incline, les deux regles coincident : pas de regression."""
+        _, occupancy = occupancy_of(synthetic.centrifugal_impeller(front_shroud=True))
+        result = topo.characteristic_radii(occupancy)
+        self.assertClose(result.r_1s, 0.035, rel=config.VALID_GEOM_TOL)
+        self.assertEqual(result.warnings, [])
+
     def test_disque_arriere_debordant(self):
         """Un disque arriere plus large que les aubes ne doit pas fixer r_2."""
         roue = synthetic.combine([

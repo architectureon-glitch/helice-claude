@@ -218,6 +218,41 @@ def _blade_outer_index(blade_row: list[bool], row: list[float]) -> int:
     return _outer_index(row)
 
 
+def _shroud_eye(occupancy: OccupancyMap, iz_1: int) -> tuple[int, int]:
+    """Index radial de l'oeillard, sur une roue fermee (SPEC 3.2, cas ferme).
+
+    Au-dela du bord d'attaque, cote aspiration, le flasque avant ne laisse
+    qu'une couronne pleine percee en son centre.  C'est ce percement qui fixe
+    la section d'entree, pas l'extremite des pales : sur une roue fermee les
+    aubes courent jusque sous le flasque, et lire `r_1s` sur elles donne le
+    rayon exterieur de la roue au lieu du rayon d'aspiration.  Le rayon retenu
+    est le plus petit rayon perce des rangees de flasque, c'est-a-dire le col.
+
+    Renvoie `(index de l'oeillard, index du moyeu a ce plan)`, `(-1, -1)` si
+    aucune rangee de flasque n'est reconnue.
+    """
+    best, best_hub = -1, -1
+    for iz in range(occupancy.nz - 1, iz_1, -1):
+        row = occupancy.f[iz]
+        outer = _outer_index(row)
+        if outer < 0:  # rangee vide : au-dessus de la piece
+            continue
+        # Bord interieur de la couronne exterieure : on remonte vers l'axe tant
+        # qu'il y a de la matiere.  Le test porte sur la continuite de la
+        # couronne, pas sur la vacuite de l'oeillard : une roue fermee peut
+        # tres bien porter un bossage d'arbre en son centre, qui donnera r_1h.
+        inner = outer
+        while inner > 0 and row[inner - 1] > config.F_VIDE:
+            inner -= 1
+        if inner == 0:  # la matiere touche l'axe : ce n'est pas un flasque perce
+            continue
+        if not any(row[ir] >= config.F_SOLIDE for ir in range(inner, outer + 1)):
+            continue
+        if best < 0 or inner < best:
+            best, best_hub = inner, _hub_index(row)
+    return best, best_hub
+
+
 def _shroud_present(row: list[float]) -> bool:
     """Vrai si du plein reapparait au-dela d'une cellule de pale (flasque avant)."""
     seen_blade = False
@@ -317,11 +352,29 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
     # r_1s et r_2s sont les rayons exterieurs **des pales**, pas de la matiere :
     # sur une roue fermee, le flasque avant s'etend bien au-dela des pales au
     # plan d'aspiration, et le compter donnerait un rayon d'oeillard trop grand.
+    topology.closed_impeller = (
+        sum(1 for iz in blade_rows if _shroud_present(occupancy.f[iz])) >= config.MIN_BLADE_SECTIONS
+    )
+
     row_1 = occupancy.f[iz_1]
     outer_1 = _blade_outer_index(blade[iz_1], row_1)
     hub_1 = _hub_index(row_1)
     topology.r_1s = occupancy.r_centres[outer_1] if outer_1 >= 0 else topology.r_tip
     topology.r_1h = occupancy.r_centres[hub_1] if hub_1 >= 0 else 0.0
+
+    # Roue fermee : l'entree est le percement du flasque, pas le bout des pales.
+    if topology.closed_impeller:
+        eye, eye_hub = _shroud_eye(occupancy, iz_1)
+        if eye > 0:
+            topology.r_1s = occupancy.r_centres[eye]
+            topology.r_1h = occupancy.r_centres[eye_hub] if eye_hub >= 0 else 0.0
+        else:
+            topology.warnings.append(
+                "roue fermee mais oeillard introuvable : le rayon d'aspiration est lu sur "
+                "les pales, ce qui le surestime. Imposez-le par --r-aspiration."
+            )
+            topology.confidence.set("rayons", MEDIUM)
+
     topology.r_1 = math.sqrt((topology.r_1s ** 2 + topology.r_1h ** 2) / 2.0)
     topology.r_aspiration = topology.r_1s
 
@@ -330,10 +383,6 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
     hub_2 = _hub_index(row_2)
     topology.r_2s = occupancy.r_centres[outer_2] if outer_2 >= 0 else topology.r_tip
     topology.r_2h = occupancy.r_centres[hub_2] if hub_2 >= 0 else 0.0
-
-    topology.closed_impeller = (
-        sum(1 for iz in blade_rows if _shroud_present(occupancy.f[iz])) >= config.MIN_BLADE_SECTIONS
-    )
 
     # 3.3 Classification. Le rapport est pris sur les rayons exterieurs, seule
     # definition commune aux trois familles : pour une roue axiale le bord de

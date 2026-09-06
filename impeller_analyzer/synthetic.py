@@ -327,6 +327,7 @@ def centrifugal_impeller(
     sense: int = 1,
     front_shroud: bool = False,
     shroud_thickness: float = 0.006,
+    flat_shroud: bool = False,
     n_radial: int = 20,
     n_span: int = 5,
     hub_segments: int = 180,
@@ -341,9 +342,17 @@ def centrifugal_impeller(
     `front_shroud` ajoute le flasque avant : la roue devient **fermee**, la
     veine est entierement enclose entre les deux flasques et seul l'oeillard
     reste ouvert. C'est la forme la plus repandue des roues de pompe.
+
+    `flat_shroud` la rend **plate** : le dessus de la veine reste a `eye_height`
+    d'un bout a l'autre et le flasque est une couronne posee dessus. Les pales
+    courent alors jusque sous le flasque au plan d'entree, et leur rayon
+    exterieur n'y est plus le rayon d'aspiration -- c'est le percement du
+    flasque qui l'est. Forme courante des roues de gros debit.
     """
 
     def z_hi(r: float) -> float:
+        if flat_shroud:
+            return eye_height
         s = (r - r1) / (r2 - r1)
         return eye_height * (1.0 - s)
 

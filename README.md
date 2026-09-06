@@ -143,6 +143,26 @@ l'asymétrie reste proche de zéro, la question ne se tranche pas, la convention
 +Z est conservée et la confiance descend à `low`. `--aspiration +z|-z` impose
 alors la réponse.
 
+### Sur une roue fermée, l'entrée est le percement du flasque
+
+Le rayon d'aspiration se lit normalement sur l'extrémité des pales au plan
+d'entrée. Sur une roue **fermée** cette règle se retourne : les aubes courent
+jusque sous le flasque avant, et les lire donne le rayon extérieur de la roue au
+lieu de l'ouïe. C'est le **percement du flasque** qui fait l'entrée. L'ouïe est
+donc cherchée au-dessus du bord d'attaque, côté aspiration : dans chaque rangée
+on remonte vers l'axe depuis le bord extérieur tant qu'il y a de la matière, et
+le bord intérieur de cette couronne est l'ouïe — le plus petit trouvé, c'est-à-dire
+le col. Le test porte sur la continuité de la couronne, pas sur la vacuité de
+l'ouïe : une roue fermée peut porter un bossage d'arbre en son centre, qui donne
+alors `r1h`. Sur un flasque conique la couronne se referme dès le bord d'attaque
+et les deux règles coïncident.
+
+L'écart n'est pas marginal. Sur une roue de Ø 335 à 3 pales très enveloppées,
+lire `r1s` sur les aubes donnait 160,9 mm au lieu de 92,7 : le rapport `r2/r1s`
+tombait à 1,04, la roue était classée *axiale*, β2 valait 9,7°, la hauteur
+d'Euler devenait négative et l'outil ne trouvait aucun point de fonctionnement.
+Avec l'ouïe, le rapport vaut 1,80 et la sortie redevient radiale.
+
 ### Le rayon de sortie est celui des pales, pas de la matière
 
 Une roue de pompe semi-ouverte est ouverte à l'avant et **fermée au dos** : les
@@ -267,7 +287,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-161 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+163 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture
