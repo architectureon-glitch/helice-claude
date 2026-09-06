@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from .. import config
 from ..confidence import HIGH, LOW, MEDIUM, ConfidenceMap, worst
 from ..mesh import TriMesh, rotation_matrix
-from ..numeric import dft_magnitudes
 from .occupancy import OccupancyMap
 from .proximity import hausdorff_distance
 
@@ -109,7 +108,11 @@ def count_blades(
     """Compte les pales par transformee de Fourier du signal `g(theta)`.
 
     Le nombre de pales est l'indice de l'harmonique dominante dans
-    `[BLADES_MIN, BLADES_MAX]`.
+    `[BLADES_MIN, BLADES_MAX]`.  Le spectre est celui de
+    `OccupancyMap.theta_spectrum`, qui transforme cellule par cellule avant de
+    sommer les modules : transformer le signal deja integre sur la zone de pales
+    fait disparaitre l'harmonique N des que les pales se recouvrent en
+    projection, ce qui est le cas usuel d'une roue a fort enroulement.
 
     Deux rapports d'amplitude sont calcules et rapportes.  Le critere de
     confiance retient le second : une roue a N pales produit **toujours** des
@@ -120,8 +123,7 @@ def count_blades(
     est neanmoins reporte, conformement a la lettre de la SPEC.
     """
     result = BladeCount()
-    signal = occupancy.theta_signal()
-    amplitudes = dft_magnitudes(signal, config.BLADES_MAX)
+    amplitudes = occupancy.theta_spectrum(config.BLADES_MAX)
     result.amplitudes = amplitudes
 
     candidates = range(config.BLADES_MIN, config.BLADES_MAX + 1)

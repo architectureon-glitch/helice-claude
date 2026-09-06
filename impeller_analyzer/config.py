@@ -82,6 +82,7 @@ OCCUPANCY_MIN_CELL = 1e-12  # m - taille minimale d'une cellule, garde-fou contr
 BLADES_MIN = 2  # nombre de pales minimal cherche (SPEC 3.1)
 BLADES_MAX = 12  # nombre de pales maximal cherche (SPEC 3.1)
 FFT_RATIO_MIN = 3.0  # - - confiance high si l'harmonique dominante depasse 3x la suivante (SPEC 3.1)
+SPECTRUM_MAX_ROWS = 60  # tranches - hauteurs echantillonnees pour le spectre angulaire cellule par cellule
 FFT_RATIO_MEDIUM = 1.5  # - - en deca de ce rapport la detection tombe en confiance low
 AXIS_TOL = 0.05  # - - tolerance d'egalite relative des valeurs propres d'inertie (SPEC 2.1)
 SYM_TOL = 0.02  # - - distance de Hausdorff relative admise apres rotation de 2*pi/N (SPEC 3.1)
@@ -99,14 +100,21 @@ JACOBI_TOL = 1e-14  # - - seuil d'arret relatif de la diagonalisation de Jacobi
 # ---------------------------------------------------------------------------
 N_SECTIONS = 11  # coupes cylindriques reparties du moyeu au tip (SPEC 4.1)
 N_STATIONS = 25  # stations de decoupe de la corde pour la ligne de cambrure (SPEC 4.2)
-SPLINE_SMOOTH = 0.001  # - - lissage relatif : residu RMS vise = SPLINE_SMOOTH * corde (SPEC 4.2)
+SPLINE_SMOOTH = 0.001  # - - lissage relatif : residu RMS vise = SPLINE_SMOOTH * amplitude de cambrure (SPEC 4.2)
 SECTION_MARGIN = 0.02  # - - retrait relatif aux deux bouts de la plage [r_moyeu, r_tip] (SPEC 4.1)
 BETA_CHORD_FRACTION = 0.10  # - - fraction de corde sur laquelle sont moyennes beta1 et beta2 (SPEC 4.3)
+CAMBER_END_TRIM = 1.0  # epaisseurs - longueur ecartee a chaque bout de corde (zone des faces de bout)
+CAMBER_TRIM_TAPER = 2.0  # - - vitesse d'ouverture d'epaisseur, en multiples de e_max/corde, marquant une face de bout
+CAMBER_MIN_STATIONS = 6  # stations - nombre minimal conserve apres ecretage des bouts
+CAMBER_ITERATIONS = 3  # - - passes de recalage de la coupe perpendiculairement a la cambrure locale
 SPLINE_LAMBDA_MIN = 1e-18  # - - borne basse de la recherche du parametre de penalisation
 SPLINE_LAMBDA_MAX = 1e12  # - - borne haute de la recherche du parametre de penalisation
 SPLINE_BISECTION_STEPS = 80  # - - iterations de bissection sur log(lambda)
 MIN_PROFILE_POINTS = 8  # points - taille minimale d'une polyligne pour etre exploitee comme profil
 MIN_BLADE_SECTIONS = 3  # coupes - nombre minimal de coupes exploitables pour une confiance > low
+SECTION_REFINE_STEPS = 6  # - - bissections de recalage d'un point de coupe sur la surface exacte
+SECTION_MAX_WRAP = 3.141592653589793  # rad - enroulement maximal d'un profil de pale (au-dela : contour de moyeu)
+CHORD_THICKNESS_MIN = 2.0  # - - rapport corde/epaisseur en deca duquel un profil est juge mal conditionne
 
 # ---------------------------------------------------------------------------
 # Classification de la roue
@@ -184,7 +192,8 @@ PLOT_BAND_PLEIN = 0.85  # - - position d'affichage du seuil F_SOLIDE sur l'echel
 # ---------------------------------------------------------------------------
 # Tolerances de la campagne de validation (SPEC phase 8)
 # ---------------------------------------------------------------------------
-VALID_GEOM_TOL = 0.02  # - - ecart relatif admis sur N, beta1, beta2, r1s, r2 (SPEC 8.1)
+VALID_GEOM_TOL = 0.02  # - - ecart relatif admis sur N, r1s, r2 (SPEC 8.1)
+VALID_BETA_DEG = 2.0  # degres - ecart absolu admis sur beta1 et beta2 (SPEC 8.1, voir README)
 VALID_REFERENCE_TOL = 0.18  # - - ecart relatif admis sur H au BEP du cas de reference (SPEC 8.2)
 VALID_INVARIANCE_TOL = 0.005  # - - ecart relatif admis apres rotation/translation (SPEC 8.3)
 VALID_DECIMATION_DEG = 3.0  # degres - ecart admis sur beta2 apres decimation a 20 % (SPEC 8.4)

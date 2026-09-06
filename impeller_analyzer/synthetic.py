@@ -242,12 +242,23 @@ def axial_impeller(
     return combine(parts)
 
 
-def _centrifugal_theta(r: float, r1: float, r2: float, beta1_deg: float, beta2_deg: float, steps: int = 400) -> float:
+def _centrifugal_theta(
+    r: float,
+    r1: float,
+    r2: float,
+    beta1_deg: float,
+    beta2_deg: float,
+    meridional_slope: Callable[[float], float] | None = None,
+    steps: int = 400,
+) -> float:
     """Angle polaire de la ligne de cambrure d'une aube centrifuge.
 
-    Integration de `dtheta/dr = 1 / (r tan(beta(r)))` avec `beta` variant
-    lineairement de `beta1` a `beta2` : l'angle de pale de la geometrie produite
-    vaut donc exactement `beta1` en `r1` et `beta2` en `r2` (SPEC 4.3).
+    Integration de `dtheta = dm / (r tan(beta(r)))` avec `beta` variant
+    lineairement de `beta1` a `beta2` et `dm = sqrt(1 + (dz/dr)^2) dr`
+    l'abscisse curviligne meridienne.  L'angle de pale de la geometrie produite,
+    au sens de la SPEC 4.3 mesure sur la surface de courant, vaut donc exactement
+    `beta1` en `r1` et `beta2` en `r2` -- y compris quand la veine descend, ce
+    qui est le cas des que la roue a un oeillard axial.
     """
     if r <= r1:
         return 0.0
@@ -256,10 +267,11 @@ def _centrifugal_theta(r: float, r1: float, r2: float, beta1_deg: float, beta2_d
     for i in range(n):
         ra = r1 + (r - r1) * i / n
         rb = r1 + (r - r1) * (i + 1) / n
-        for rc in (0.5 * (ra + rb),):
-            s = (rc - r1) / (r2 - r1)
-            beta = math.radians(beta1_deg + (beta2_deg - beta1_deg) * s)
-            total += (rb - ra) / (rc * math.tan(beta))
+        rc = 0.5 * (ra + rb)
+        s = (rc - r1) / (r2 - r1)
+        beta = math.radians(beta1_deg + (beta2_deg - beta1_deg) * s)
+        slope = meridional_slope(rc) if meridional_slope is not None else 0.0
+        total += (rb - ra) * math.sqrt(1.0 + slope * slope) / (rc * math.tan(beta))
     return total
 
 
@@ -273,6 +285,7 @@ def centrifugal_impeller(
     b2: float = 0.010,
     eye_height: float = 0.035,
     thickness: float = 0.004,
+    edge_taper: float = 0.0,
     sense: int = 1,
     shroud_thickness: float = 0.006,
     n_radial: int = 20,
@@ -298,6 +311,13 @@ def centrifugal_impeller(
     def z_lo(r: float) -> float:
         return z_hi(r) - width(r)
 
+    def mid_slope(r: float) -> float:
+        """Pente dz/dr de la surface de courant a mi-envergure."""
+        step = (r2 - r1) * 1e-4
+        z_mid_a = z_hi(r - step) - 0.5 * width(r - step)
+        z_mid_b = z_hi(r + step) - 0.5 * width(r + step)
+        return (z_mid_b - z_mid_a) / (2.0 * step)
+
     # Moyeu / flasque arriere : solide de revolution sous la veine.
     bottom = z_lo(r2) - shroud_thickness
     profile: list[tuple[float, float]] = [(0.0, bottom)]
@@ -310,14 +330,29 @@ def centrifugal_impeller(
     profile.append((0.0, z_lo(r1)))
     parts = [revolve(profile, hub_segments)]
 
-    half_angle_at = lambda r: 0.5 * thickness / r
+    def half_angle_at(r: float) -> float:
+        """Demi-epaisseur angulaire de l'aube au rayon r.
+
+        `edge_taper` amincit l'aube pres du bord d'attaque et du bord de fuite
+        par une loi elliptique, comme le veut le dessin usuel d'une aube :
+        laisse a zero, l'aube est coupee carre aux deux bouts.
+        """
+        half = 0.5 * thickness / r
+        if edge_taper <= 0.0:
+            return half
+        s = (r - r1) / (r2 - r1)
+        edge = min(s, 1.0 - s) / edge_taper
+        if edge >= 1.0:
+            return half
+        return half * math.sqrt(max(0.0, 1.0 - (1.0 - edge) ** 2))
+
     for blade in range(n_blades):
         base = 2.0 * math.pi * blade / n_blades
         grid_a: list[list[Vec3]] = []
         grid_b: list[list[Vec3]] = []
         for i in range(n_radial):
             r = r1 + (r2 - r1) * i / (n_radial - 1)
-            theta_c = base + sense * _centrifugal_theta(r, r1, r2, beta1_deg, beta2_deg)
+            theta_c = base + sense * _centrifugal_theta(r, r1, r2, beta1_deg, beta2_deg, mid_slope)
             half = half_angle_at(r)
             row_a: list[Vec3] = []
             row_b: list[Vec3] = []

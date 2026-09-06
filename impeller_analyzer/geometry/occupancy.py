@@ -21,6 +21,7 @@ qui evite de marcher les `GRID_NR` cellules pour chaque rayon.
 
 from __future__ import annotations
 
+import cmath
 import math
 from dataclasses import dataclass, field
 
@@ -128,6 +129,70 @@ class OccupancyMap:
                 signal[itheta] += total
         return signal
 
+    def theta_spectrum(
+        self,
+        harmonics: int,
+        mask: list[list[bool]] | None = None,
+    ) -> list[float]:
+        """Spectre angulaire moyen, module somme **cellule par cellule**.
+
+        Le spectre de `theta_signal` -- qui integre d'abord sur toute la zone de
+        pales puis transforme -- s'effondre des que les pales se recouvrent en
+        projection : une roue a N pales dont l'enroulement approche `2*pi/N`
+        remplit tous les secteurs, le signal integre devient presque constant et
+        l'harmonique N disparait devant celle en 2N.  Le probleme vient de la
+        phase : a rayon et hauteur fixes la pale occupe une bande angulaire
+        etroite, mais sa position tourne avec la hauteur, et les contributions
+        s'annulent a la sommation.
+
+        On transforme donc **avant** de sommer, et on additionne les modules.
+        Le coefficient de Fourier de chaque cellule est obtenu sans boucle sur
+        les cellules : les secteurs occupes sont deja connus sous forme
+        d'intervalles radiaux, dont un tableau de differences complexe donne
+        directement le coefficient a tout rayon.
+        """
+        if mask is None:
+            mask = self.blade_mask()
+        orders = list(range(config.BLADES_MIN, harmonics + 1))
+        if not orders or self.nz == 0:
+            return [0.0] * (harmonics + 1)
+        tables = {
+            k: [cmath.exp(-2.0j * math.pi * k * i / self.n_theta) for i in range(self.n_theta)]
+            for k in orders
+        }
+        amplitudes = [0.0] * (harmonics + 1)
+        weight_total = 0.0
+        stride = max(1, self.nz // config.SPECTRUM_MAX_ROWS)
+        for iz in range(0, self.nz, stride):
+            row = mask[iz]
+            if not any(row):
+                continue
+            sectors = self.intervals[iz]
+            diffs = {k: [0j] * (self.nr + 1) for k in orders}
+            for itheta in range(self.n_theta):
+                spans = sectors[itheta]
+                if not spans:
+                    continue
+                for k in orders:
+                    table = tables[k][itheta]
+                    diff = diffs[k]
+                    for start, stop in spans:
+                        diff[start] += table
+                        diff[stop] -= table
+            running = {k: 0j for k in orders}
+            for ir in range(self.nr):
+                for k in orders:
+                    running[k] += diffs[k][ir]
+                if not row[ir]:
+                    continue
+                weight = self.r_centres[ir]
+                weight_total += weight
+                for k in orders:
+                    amplitudes[k] += weight * abs(running[k]) / self.n_theta
+        if weight_total > 0.0:
+            amplitudes = [value / weight_total for value in amplitudes]
+        return amplitudes
+
     def summary(self) -> dict:
         """Resume serialisable de la carte (les tableaux complets restent internes)."""
         blade = self.blade_mask()
@@ -198,8 +263,13 @@ def build_occupancy(
         hi_z = za if za > zb else zb
         if zc > hi_z:
             hi_z = zc
-        first = int(math.ceil((lo_z - z_min) / dz - 0.5))
-        last = int(math.floor((hi_z - z_min) / dz - 0.5))
+        # La plage est elargie d'une tranche de chaque cote : un triangle dont
+        # une arete affleure exactement le plan de coupe est traite comme
+        # traversant par la regle de l'epsilon ci-dessous, alors que le calcul
+        # d'indice le rejetterait a 1e-16 pres. Le test de signe ecarte ensuite
+        # les triangles reellement hors plan, pour un cout negligeable.
+        first = int(math.ceil((lo_z - z_min) / dz - 0.5)) - 1
+        last = int(math.floor((hi_z - z_min) / dz - 0.5)) + 1
         if first < 0:
             first = 0
         if last > nz - 1:
