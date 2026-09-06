@@ -272,9 +272,11 @@ def build_page(
 
 
 def _fill(payload_json: str, server: bool) -> str:
-    """Injecte la charge utile et le mode dans le gabarit."""
-    return _TEMPLATE.replace("__DONNEES__", payload_json).replace(
-        "__SERVEUR__", "true" if server else "false"
+    """Injecte la charge utile, le mode et le port par defaut dans le gabarit."""
+    return (
+        _TEMPLATE.replace("__DONNEES__", payload_json)
+        .replace("__SERVEUR__", "true" if server else "false")
+        .replace("__PORT__", str(config.SERVER_PORT))
     )
 
 
@@ -440,6 +442,19 @@ details summary:focus-visible{outline:2px solid var(--accent); outline-offset:2p
   padding:.6rem; border:0; border-radius:2px; background:var(--accent); color:#042023; cursor:pointer;
 }
 .lancer:disabled{opacity:.5; cursor:default}
+.hors-serveur{
+  margin-top:1rem; padding:.85rem 1rem; border-left:2px solid var(--oxide);
+  background:var(--paper); font-size:.82rem; color:var(--ink-soft);
+}
+.hors-serveur[hidden]{display:none}
+.hors-serveur p{margin:0 0 .5rem}
+.hors-serveur p:last-child{margin-bottom:0}
+.hors-serveur strong{color:var(--ink)}
+.hors-serveur code{
+  display:inline-block; font-family:"IBM Plex Mono", ui-monospace, monospace; font-size:.8rem;
+  background:var(--panel); border:1px solid var(--line); border-radius:2px; padding:.15rem .4rem;
+  color:var(--ink); overflow-wrap:anywhere;
+}
 .etat{margin-top:.8rem; font-size:.82rem; color:var(--ink-soft); min-height:1.2em}
 .etat.erreur{color:var(--erreur)}
 .progres{
@@ -592,6 +607,20 @@ th{font-weight:500; color:var(--ink-soft); font-size:.78rem}
               </div>
             </div>
           </details>
+
+          <div class="hors-serveur" id="hors-serveur" hidden>
+            <p><strong>Cette page ne peut pas analyser toute seule.</strong></p>
+            <p>
+              Elle est la façade de l'application ; le calcul se fait en Python, par un
+              serveur local. Ouverte depuis un fichier, elle n'a personne a qui parler.
+            </p>
+            <p>Dans un terminal, a la racine du projet&nbsp;:</p>
+            <code>python3 -m impeller_analyzer.serve</code>
+            <p>
+              puis ouvrez <code>http://127.0.0.1:__PORT__/</code> — le navigateur s'y ouvre
+              tout seul. Vous y retrouverez ce meme ecran, en etat de marche.
+            </p>
+          </div>
 
           <button class="lancer" id="lancer" type="submit" disabled>Analyser</button>
           <div class="progres" id="progres"><i></i></div>
@@ -1049,6 +1078,12 @@ if (SERVEUR) {
   const zoneDetail = document.getElementById("zone-detail");
   let choisi = null;
 
+  /* Ouverte depuis le disque, la page n'a aucun serveur a interroger : autant le
+     dire tout de suite plutot que de laisser le navigateur repondre
+     « NetworkError » apres le clic. */
+  const horsServeur = location.protocol === "file:";
+  if (horsServeur) document.getElementById("hors-serveur").hidden = false;
+
   function message(texte, erreur){
     etat.textContent = texte || "";
     etat.classList.toggle("erreur", Boolean(erreur));
@@ -1058,7 +1093,7 @@ if (SERVEUR) {
     choisi = file;
     zoneTitre.textContent = file.name;
     zoneDetail.textContent = (file.size / 1048576).toFixed(2) + " Mo — cliquez pour en choisir un autre";
-    lancer.disabled = false;
+    lancer.disabled = horsServeur;
     message("");
   }
   entree.addEventListener("change", () => accepter(entree.files[0]));
@@ -1103,7 +1138,13 @@ if (SERVEUR) {
       render(data);
       message("");
     } catch (error) {
-      message(String(error.message || error), true);
+      /* Un echec de fetch remonte un TypeError sans detail utile : on le
+         traduit en la seule cause plausible ici, le serveur absent. */
+      const injoignable = error instanceof TypeError;
+      message(injoignable
+        ? "le serveur local ne repond pas. Verifiez qu'il tourne encore "
+          + "(python3 -m impeller_analyzer.serve) et rechargez la page."
+        : String(error.message || error), true);
     } finally {
       running = false;
       lancer.disabled = false;

@@ -130,6 +130,20 @@ class TestPage(ViewerTestCase):
         sans = report.write_all(self.result, self.path("sans"), source=self.source, viewer_page=False)
         self.assertNotIn("viewer", sans)
 
+    def test_page_ouverte_hors_serveur(self):
+        """Ouverte depuis le disque, la coquille explique pourquoi elle ne peut rien faire."""
+        page = viewer.build_app_page()
+        self.assertNotIn("__PORT__", page)
+        self.assertIn(str(config.SERVER_PORT), page)
+        self.assertIn('id="hors-serveur"', page)
+        self.assertIn("python3 -m impeller_analyzer.serve", page)
+        # Le bloc est masque par defaut et revele par le protocole file:.
+        self.assertIn('id="hors-serveur" hidden', page)
+        self.assertIn('location.protocol === "file:"', page)
+        self.assertIn("lancer.disabled = horsServeur", page)
+        # Un echec de fetch est traduit, pas recopie tel quel.
+        self.assertIn("le serveur local ne repond pas", page)
+
     def test_theme_clair_et_sombre(self):
         """Les trois etats de theme sont couverts par des jetons de couleur."""
         page = viewer.build_page(self.result)
