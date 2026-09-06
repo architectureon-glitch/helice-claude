@@ -87,6 +87,10 @@ AXIS_TOL = 0.05  # - - tolerance d'egalite relative des valeurs propres d'inerti
 SYM_TOL = 0.02  # - - distance de Hausdorff relative admise apres rotation de 2*pi/N (SPEC 3.1)
 AXIS_WARN_DEG = 5.0  # degres - ecart axe detecte / Z au-dela duquel on avertit et on realigne (SPEC 2.1)
 HAUSDORFF_SAMPLES = 4000  # points - echantillonnage du maillage pour la distance de Hausdorff
+PROXIMITY_CELLS = 32  # cellules - resolution du hachage spatial des triangles (plus grande dimension)
+BLADE_ROW_MIN_CELLS = 1  # cellules - occupation minimale d'une ligne pour compter dans la zone de pales
+BLADE_BLOB_MIN_CELLS = 20  # cellules - taille minimale absolue d'un ilot de zone de pales retenu
+BLADE_BLOB_MIN_FRACTION = 0.05  # - - taille minimale d'un ilot, en fraction du plus gros ilot
 JACOBI_MAX_SWEEPS = 64  # - - nombre maximal de balayages de la diagonalisation de Jacobi
 JACOBI_TOL = 1e-14  # - - seuil d'arret relatif de la diagonalisation de Jacobi
 
