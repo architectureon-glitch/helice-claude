@@ -9,7 +9,7 @@ usuels.
 from __future__ import annotations
 
 from .. import config
-from ..mesh import TriMesh, cross, dot, sub
+from ..mesh import TriMesh, cross, dot
 
 
 def _face_components(mesh: TriMesh) -> list[list[int]]:

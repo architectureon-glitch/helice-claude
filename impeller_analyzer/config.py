@@ -123,6 +123,8 @@ R_RATIO_AXIAL_MAX = 1.15  # - - r2/r1s en deca duquel la roue est axiale (SPEC 3
 R_RATIO_MIXED_MAX = 1.80  # - - r2/r1s en deca duquel la roue est mixte, au-dela centrifuge (SPEC 3.3)
 NQ_CENTRIFUGAL_MAX = 35.0  # tr/min - vitesse specifique n_q maximale d'une roue centrifuge (SPEC 3.3)
 NQ_MIXED_MAX = 80.0  # tr/min - n_q maximale d'une roue mixte, au-dela axiale (SPEC 3.3)
+NQ_HEAD_EXPONENT = 0.75  # - - exposant de la hauteur dans n_q = n sqrt(Q) / H^0.75 (SPEC 3.3)
+MIXED_DISCHARGE_DEG = 45.0  # degres - inclinaison meridienne de repli d'une roue mixte degeneree
 B2_RADIUS_FRACTION = 0.98  # - - rayon relatif ou est mesuree la largeur de sortie b2 (SPEC 3.4)
 HELIX_PITCH_RATIO_MAX = 8.0  # - - pas helicoidal / rayon en deca duquel le sens axial est fiable (SPEC 4.4)
 BETA2_RADIAL_DEG = 85.0  # degres - au-dela, aubes radiales : sens de rotation ambigu (SPEC 4.4)
@@ -188,6 +190,14 @@ PLOT_TICKS = 6  # - - nombre de graduations par axe
 PLOT_DPI = 96  # px/pouce - resolution declaree dans l'entete PNG
 PLOT_BAND_VIDE = 0.15  # - - position d'affichage du seuil F_VIDE sur l'echelle de couleur
 PLOT_BAND_PLEIN = 0.85  # - - position d'affichage du seuil F_SOLIDE sur l'echelle de couleur
+
+# ---------------------------------------------------------------------------
+# Conversions d'unites, pour la presentation seule (les calculs restent en SI)
+# ---------------------------------------------------------------------------
+SECONDS_PER_HOUR = 3600.0  # s/h - conversion m3/s -> m3/h des tableaux et des courbes
+MM_PER_M = 1000.0  # mm/m - conversion des longueurs pour l'affichage
+CM3_PER_M3 = 1.0e6  # cm3/m3 - conversion du volume pour le rapport d'import
+W_PER_KW = 1000.0  # W/kW - conversion des puissances pour l'affichage
 
 # ---------------------------------------------------------------------------
 # Tolerances de la campagne de validation (SPEC phase 8)

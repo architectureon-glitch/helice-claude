@@ -205,7 +205,8 @@ def check_reference_case(case: dict) -> Report:
         Check("hauteur au BEP", best.head, duty["H_m"], config.VALID_REFERENCE_TOL, "m")
     )
     report.notes.append(
-        f"debit calcule au BEP {best.flow * 3600.0:.1f} m3/h, publie {duty['Q_m3_h']:.1f} m3/h"
+        f"debit calcule au BEP {best.flow * config.SECONDS_PER_HOUR:.1f} m3/h, "
+        f"publie {duty['Q_m3_h']:.1f} m3/h"
     )
     if "source" in case:
         report.notes.append(f"source des donnees publiees : {case['source']}")
@@ -376,3 +377,9 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - point d'en
     failed = [report for report in reports if not report.passed]
     print(f"{len(reports) - len(failed)} / {len(reports)} controles conformes")
     return 0 if not failed else 1
+
+
+if __name__ == "__main__":  # pragma: no cover - point d'entree
+    import sys
+
+    sys.exit(main())

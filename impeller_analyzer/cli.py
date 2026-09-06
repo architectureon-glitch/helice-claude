@@ -127,7 +127,7 @@ def summarise(result, produced: dict[str, str]) -> str:
     if topology is not None and blades is not None:
         lines.append(
             f"Roue {topology.machine_type}, {topology.blades.n_blades} pales, "
-            f"r1s = {topology.r_1s * 1000.0:.1f} mm, r2 = {topology.r_2 * 1000.0:.1f} mm, "
+            f"r1s = {topology.r_1s * config.MM_PER_M:.1f} mm, r2 = {topology.r_2 * config.MM_PER_M:.1f} mm, "
             f"beta1/beta2 = {blades.beta1_deg:.1f}/{blades.beta2_deg:.1f} deg"
         )
         lines.append(f"Sens de rotation : {blades.rotation_label}")
@@ -136,8 +136,8 @@ def summarise(result, produced: dict[str, str]) -> str:
         if point is None:
             continue
         lines.append(
-            f"{curve.rpm:6.0f} tr/min : Q = {point.flow * 3600.0:8.1f} m3/h, "
-            f"H = {point.head:7.2f} m, P = {point.shaft_power / 1000.0:7.2f} kW, "
+            f"{curve.rpm:6.0f} tr/min : Q = {point.flow * config.SECONDS_PER_HOUR:8.1f} m3/h, "
+            f"H = {point.head:7.2f} m, P = {point.shaft_power / config.W_PER_KW:7.2f} kW, "
             f"NPSHr = {point.npshr:5.2f} m"
         )
     if result.speed_limit is not None:

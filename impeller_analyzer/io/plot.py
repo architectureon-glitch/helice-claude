@@ -16,7 +16,7 @@ import math
 import struct
 import unicodedata
 import zlib
-from typing import Callable, Sequence
+from typing import Sequence
 
 from .. import config
 
@@ -303,10 +303,10 @@ def occupancy_png(occupancy_map, path: str, title: str = "Carte d'occupation f(r
     canvas.text(10, plot_y0, "z (mm)", BLACK)
 
     for value in _nice_ticks(0.0, occupancy_map.r_max * 1000.0, config.PLOT_TICKS):
-        x = plot_x0 + (plot_x1 - plot_x0) * value / (occupancy_map.r_max * 1000.0)
+        x = plot_x0 + (plot_x1 - plot_x0) * value / (occupancy_map.r_max * config.MM_PER_M)
         canvas.line(x, plot_y1, x, plot_y1 + 4, BLACK)
         canvas.text(int(x) - 12, plot_y1 + 8, _format_tick(value), BLACK)
-    z_lo, z_hi = occupancy_map.z_min * 1000.0, occupancy_map.z_max * 1000.0
+    z_lo, z_hi = occupancy_map.z_min * config.MM_PER_M, occupancy_map.z_max * config.MM_PER_M
     for value in _nice_ticks(z_lo, z_hi, config.PLOT_TICKS):
         y = plot_y1 - (plot_y1 - plot_y0) * (value - z_lo) / (z_hi - z_lo)
         canvas.line(plot_x0 - 4, y, plot_x0, y, BLACK)

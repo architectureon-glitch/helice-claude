@@ -607,9 +607,11 @@ def load_mesh(
     report.area_m2 = mesh.area()
 
     lo, hi = mesh.bounds()
-    report.bbox_min_mm = tuple(round(c * 1000.0, 6) for c in lo)  # type: ignore[assignment]
-    report.bbox_max_mm = tuple(round(c * 1000.0, 6) for c in hi)  # type: ignore[assignment]
-    report.extents_mm = tuple(round(hi[i] * 1000.0 - lo[i] * 1000.0, 6) for i in range(3))  # type: ignore[assignment]
+    report.bbox_min_mm = tuple(round(c * config.MM_PER_M, 6) for c in lo)  # type: ignore[assignment]
+    report.bbox_max_mm = tuple(round(c * config.MM_PER_M, 6) for c in hi)  # type: ignore[assignment]
+    report.extents_mm = tuple(
+        round((hi[i] - lo[i]) * config.MM_PER_M, 6) for i in range(3)
+    )  # type: ignore[assignment]
 
     report.confidence.set("volume", HIGH if report.watertight else MEDIUM)
     report.confidence.set("maillage", HIGH if report.watertight else MEDIUM)

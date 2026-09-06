@@ -761,7 +761,7 @@ def _rotation_confidence(
         if geometry.pitch > config.HELIX_PITCH_RATIO_MAX * geometry.reference_radius:
             level = worst(level, MEDIUM)
             geometry.warnings.append(
-                f"pas helicoidal {geometry.pitch * 1000.0:.0f} mm superieur a "
+                f"pas helicoidal {geometry.pitch * config.MM_PER_M:.0f} mm superieur a "
                 f"{config.HELIX_PITCH_RATIO_MAX} fois le rayon : nappe presque plane, "
                 "le sens de rotation deduit est peu marque"
             )
@@ -805,7 +805,7 @@ def discharge_direction(
         # geometrie de la section de sortie.
         axial_extent = max(topology.b_2, 0.0)
         radial_extent = max(topology.r_2s - topology.r_2h, 0.0)
-        meridional_angle = math.degrees(math.atan2(axial_extent, radial_extent)) if (axial_extent or radial_extent) else 45.0
+        meridional_angle = math.degrees(math.atan2(axial_extent, radial_extent)) if (axial_extent or radial_extent) else config.MIXED_DISCHARGE_DEG
         meridional = f"mixte, {meridional_angle:.0f} deg entre -Z et +r"
 
     alpha2 = math.degrees(math.atan2(cm2, cu2)) if cu2 > 0.0 else None

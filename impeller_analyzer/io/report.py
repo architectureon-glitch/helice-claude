@@ -7,7 +7,6 @@ import os
 
 from .. import config
 from ..analysis import AnalysisResult
-from ..geometry.topology import CENTRIFUGAL
 from . import plot
 
 JSON_NAME = "resultats.json"
@@ -21,7 +20,7 @@ CONFIDENCE_LABELS = {"high": "haute", "medium": "moyenne", "low": "faible"}
 
 def _mm(value: float | None) -> str:
     """Longueur en millimetres, deux decimales."""
-    return "-" if value is None else f"{value * 1000.0:.2f}"
+    return "-" if value is None else f"{value * config.MM_PER_M:.2f}"
 
 
 def _deg(value: float | None) -> str:
@@ -98,9 +97,9 @@ def performance_table(result: AnalysisResult) -> tuple[list[str], list[tuple[str
             values.append("-" if point is None else formatter(curve, point))
         rows.append((label, values))
 
-    collect("Debit nominal (m3/h)", lambda c, p: f"{p.flow * 3600.0:.1f}")
+    collect("Debit nominal (m3/h)", lambda c, p: f"{p.flow * config.SECONDS_PER_HOUR:.1f}")
     collect("Hauteur (m)", lambda c, p: f"{p.head:.2f}")
-    collect("Puissance arbre (kW)", lambda c, p: f"{p.shaft_power / 1000.0:.3f}")
+    collect("Puissance arbre (kW)", lambda c, p: f"{p.shaft_power / config.W_PER_KW:.3f}")
     collect("Couple (N.m)", lambda c, p: f"{p.torque:.2f}")
     collect("Rendement estime (%)", lambda c, p: f"{p.efficiency * 100.0:.1f}")
     collect("Vitesse specifique n_q", lambda c, p: f"{c.specific_speed:.1f}")
@@ -233,7 +232,7 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
             f"- boite englobante : {report.extents_mm[0]:.1f} x {report.extents_mm[1]:.1f} x "
             f"{report.extents_mm[2]:.1f} mm"
         )
-        lines.append(f"- volume : {report.volume_m3 * 1e6:.1f} cm3, etanche : {report.watertight}")
+        lines.append(f"- volume : {report.volume_m3 * config.CM3_PER_M3:.1f} cm3, etanche : {report.watertight}")
         lines.append(f"- duree d'analyse : {result.elapsed_s:.1f} s")
         lines.append("")
 
@@ -262,14 +261,14 @@ def write_curves(result: AnalysisResult, directory: str) -> str:
             series.append(
                 {
                     "label": f"{curve.rpm:.0f} tr/min",
-                    "x": [point.flow * 3600.0 for point in usable],
+                    "x": [point.flow * config.SECONDS_PER_HOUR for point in usable],
                     "y": [extract(point) for point in usable],
                     "color": color,
                 }
             )
             best = curve.best_efficiency_point()
             if best is not None and best.head > 0.0:
-                markers.append((best.flow * 3600.0, extract(best), color))
+                markers.append((best.flow * config.SECONDS_PER_HOUR, extract(best), color))
         panels.append(
             {
                 "titre": f"{title} - le point marque est le meilleur rendement",

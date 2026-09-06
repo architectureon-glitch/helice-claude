@@ -378,8 +378,8 @@ def apply_user_suction_radius(topology: Topology, r_aspiration_cm: float | None)
         raise ValueError("--r-aspiration doit etre strictement positif")
     if topology.r_1s > 0.0 and abs(value - topology.r_1s) / topology.r_1s > config.VALID_GEOM_TOL:
         topology.warnings.append(
-            f"rayon d'aspiration impose a {value * 1000.0:.1f} mm alors que la detection "
-            f"donne {topology.r_1s * 1000.0:.1f} mm : la valeur utilisateur est retenue"
+            f"rayon d'aspiration impose a {value * config.MM_PER_M:.1f} mm alors que la detection "
+            f"donne {topology.r_1s * config.MM_PER_M:.1f} mm : la valeur utilisateur est retenue"
         )
     topology.r_aspiration = value
     topology.r_aspiration_source = "utilisateur"
@@ -408,7 +408,7 @@ def specific_speed(rpm: float, flow: float, head: float) -> float:
     """Vitesse specifique `n_q = n * sqrt(Q) / H^0.75` (n en tr/min, Q en m3/s, H en m)."""
     if flow <= 0.0 or head <= 0.0:
         return 0.0
-    return rpm * math.sqrt(flow) / head ** 0.75
+    return rpm * math.sqrt(flow) / head ** config.NQ_HEAD_EXPONENT
 
 
 def type_from_specific_speed(n_q: float) -> str:
