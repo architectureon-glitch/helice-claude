@@ -150,6 +150,18 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
 
     lines.append("## Tableau 2 - Performances")
     lines.append("")
+    if result.blade_loops is not None and result.blade_loops.looped:
+        # Une aube en boucle sort du domaine de la SPEC : le tableau est conserve
+        # pour ce qu'il vaut, mais il ne doit pas etre lu comme une performance.
+        lines.append(
+            "> **Non applicable.** Les aubes se referment sur elles-memes (type toroidal) : "
+            "le modele de ligne moyenne suppose un bord d'attaque et un bord de fuite uniques, "
+            "et les angles de pale dont derive tout ce tableau ont ete lus entre les deux brins "
+            "d'une meme boucle. Les valeurs ci-dessous sont celles qu'aurait donnees une aube "
+            "simple de meme trace ; **elles ne decrivent pas cette roue** et ne doivent servir "
+            "ni au dimensionnement ni a la comparaison."
+        )
+        lines.append("")
     header, rows = performance_table(result)
     if header:
         lines.extend(

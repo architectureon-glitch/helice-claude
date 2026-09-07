@@ -430,3 +430,101 @@ def centrifugal_impeller(
             grid_b.append(row_b)
         parts.append(_closed_box_from_grids(grid_a, grid_b))
     return combine(parts)
+
+
+def toroidal_blade(
+    r_hub: float,
+    r_tip: float,
+    amplitude: float,
+    wrap_deg: float,
+    width: float,
+    thickness: float,
+    phase: float = 0.0,
+    steps: int = 96,
+) -> TriMesh:
+    """Une aube en boucle fermee, du type des helices toroidales.
+
+    L'aube part du moyeu a `+amplitude`, sort jusqu'a `r_tip` et revient au
+    moyeu a `-amplitude` : c'est une boucle, sans bord d'attaque ni bord de
+    fuite distincts. Une coupe a azimut fixe la traverse donc **deux fois** en
+    hauteur, ce qui est la signature que cherche `geometry.blade_loops`.
+
+    L'excursion azimutale `wrap_deg` est parcourue **a l'aller et au retour**,
+    l'azimut revenant a son point de depart : les deux brins couvrent ainsi le
+    meme secteur, comme sur les helices toroidales reelles. Un enroulement
+    monotone les separerait en azimut et la boucle se lirait, a tort, comme deux
+    aubes distinctes.
+
+    Le tube suivi a une section rectangulaire `width` x `thickness`, portee par
+    un repere local : la direction azimutale d'une part, la perpendiculaire a la
+    trajectoire dans le plan meridien d'autre part.
+    """
+    wrap = math.radians(wrap_deg)
+
+    def point(t: float) -> Vec3:
+        radius = r_hub + (r_tip - r_hub) * math.sin(math.pi * t)
+        z = amplitude * math.cos(math.pi * t)
+        angle = phase + wrap * math.sin(math.pi * t)
+        return (radius * math.cos(angle), radius * math.sin(angle), z)
+
+    rings: list[list[Vec3]] = []
+    for i in range(steps + 1):
+        t = i / steps
+        cx, cy, cz = point(t)
+        ahead = point(min(1.0, t + 1e-3))
+        behind = point(max(0.0, t - 1e-3))
+        tx, ty, tz = (ahead[0] - behind[0], ahead[1] - behind[1], ahead[2] - behind[2])
+        norm = math.sqrt(tx * tx + ty * ty + tz * tz) or 1.0
+        tx, ty, tz = tx / norm, ty / norm, tz / norm
+
+        angle = phase + wrap * math.sin(math.pi * t)
+        ex, ey, ez = -math.sin(angle), math.cos(angle), 0.0  # direction azimutale
+        dot = ex * tx + ey * ty + ez * tz
+        ex, ey, ez = ex - dot * tx, ey - dot * ty, ez - dot * tz
+        norm = math.sqrt(ex * ex + ey * ey + ez * ez) or 1.0
+        ex, ey, ez = ex / norm, ey / norm, ez / norm
+
+        fx, fy, fz = ty * ez - tz * ey, tz * ex - tx * ez, tx * ey - ty * ex
+        half_w, half_t = 0.5 * width, 0.5 * thickness
+        rings.append([
+            (cx + su * half_w * ex + sv * half_t * fx,
+             cy + su * half_w * ey + sv * half_t * fy,
+             cz + su * half_w * ez + sv * half_t * fz)
+            for su, sv in ((-1, -1), (1, -1), (1, 1), (-1, 1))
+        ])
+
+    vertices: list[Vec3] = [v for ring in rings for v in ring]
+    faces: list[tuple[int, int, int]] = []
+    for i in range(steps):
+        a, b = 4 * i, 4 * (i + 1)
+        for c in range(4):
+            d = (c + 1) % 4
+            faces.append((a + c, b + d, b + c))
+            faces.append((a + c, a + d, b + d))
+    last = 4 * steps
+    faces.extend([(0, 1, 2), (0, 2, 3), (last, last + 2, last + 1), (last, last + 3, last + 2)])
+    mesh = TriMesh(vertices, faces)
+    if mesh.volume() < 0.0:  # le sens du parcours decide de l'orientation
+        mesh = TriMesh(vertices, [(i, k, j) for i, j, k in faces])
+    return mesh
+
+
+def toroidal_propeller(
+    n_blades: int = 3,
+    r_hub: float = 0.030,
+    r_tip: float = 0.100,
+    amplitude: float = 0.022,
+    wrap_deg: float = 70.0,
+    width: float = 0.012,
+    thickness: float = 0.003,
+    hub_height: float = 0.060,
+    hub_segments: int = 180,
+) -> TriMesh:
+    """Helice a aubes toroidales : un moyeu et `n_blades` boucles fermees."""
+    parts = [cylinder(r_hub, hub_height, hub_segments)]
+    for k in range(n_blades):
+        parts.append(toroidal_blade(
+            r_hub * 0.8, r_tip, amplitude, wrap_deg, width, thickness,
+            phase=2.0 * math.pi * k / n_blades,
+        ))
+    return combine(parts)

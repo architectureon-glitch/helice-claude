@@ -143,6 +143,33 @@ l'asymétrie reste proche de zéro, la question ne se tranche pas, la convention
 +Z est conservée et la confiance descend à `low`. `--aspiration +z|-z` impose
 alors la réponse.
 
+### Les aubes qui se referment sur elles-mêmes
+
+Le modèle de ligne moyenne de la SPEC suppose une aube **simple** : une surface à
+bord d'attaque et bord de fuite uniques, dont une coupe sur une surface de
+courant donne un profil par pale. Une aube **toroïdale** est une boucle : elle
+part du moyeu, sort, se retourne au bout et revient. Une coupe la traverse deux
+fois, et l'appariement des deux faces dont sort la cambrure apparie alors la
+face d'un brin avec celle de l'autre. β1, β2, le sens de rotation et toute
+l'hydraulique qui en découle ne veulent rien dire.
+
+La signature est topologique et se lit sur la carte d'occupation, sans rien
+recouper. Elle ne se cherche pas en azimut mais **en hauteur** : les deux brins
+d'une boucle sont au même azimut, séparés en z. À rayon et azimut fixés, une aube
+simple donne un tronçon unique le long de z, une boucle en donne deux. La
+grandeur mesurée est donc la fraction des azimuts où la coupe rencontre deux
+tronçons, relevée rayon par rayon. Sur une hélice toroïdale réelle de Ø 335 elle
+vaut **1,00 de r = 74 à 161 mm** puis retombe à 0 au-delà de 162, là où les brins
+fusionnent ; sur une roue centrifuge fermée ordinaire elle plafonne à 0,23, sur
+une hélice axiale elle est nulle. Le seuil est à 0,50, au milieu d'un fossé.
+
+Reconnue, la boucle ne dégrade pas la confiance : elle **retire** les grandeurs
+concernées. Le résumé console et le tableau des performances portent une mention
+« non applicable », et β1, β2, sens de rotation, hauteur, débit, puissance,
+couple, rendement et NPSHr passent en confiance basse. Axe, nombre d'aubes,
+rayons, sections et volumes restent valables : ils ne passent pas par la
+cambrure.
+
 ### Sur une roue fermée, l'entrée est le percement du flasque
 
 Le rayon d'aspiration se lit normalement sur l'extrémité des pales au plan
@@ -287,7 +314,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-163 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+169 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture
@@ -312,6 +339,7 @@ impeller_analyzer/
 │   └── report.py        # resultats.json, rapport.md, courbes.png
 ├── geometry/
 │   ├── axis.py          # détection de l'axe, recentrage, côté aspiration
+│   ├── blade_loops.py   # aubes en boucle fermée (type toroïdal)
 │   ├── occupancy.py     # carte f(r, z) — cœur du système
 │   ├── topology.py      # pales, rayons, type de roue, sections
 │   ├── proximity.py     # distance point-maillage, Hausdorff

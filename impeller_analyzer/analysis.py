@@ -11,9 +11,10 @@ import time
 from dataclasses import dataclass, field
 
 from . import config
-from .confidence import ConfidenceMap, worst
+from .confidence import LOW, ConfidenceMap, worst
 from .geometry import axis as axis_module
 from .geometry import blade_angles as blade_module
+from .geometry import blade_loops as loops_module
 from .geometry import occupancy as occupancy_module
 from .geometry import sections as sections_module
 from .geometry import topology as topology_module
@@ -77,6 +78,7 @@ class AnalysisResult:
     occupancy: occupancy_module.OccupancyMap | None = None
     topology: topology_module.Topology | None = None
     blades: blade_module.BladeGeometry | None = None
+    blade_loops: loops_module.LoopResult | None = None
     meanline_input: meanline_module.MeanlineInput | None = None
     curves: list[meanline_module.PerformanceCurve] = field(default_factory=list)
     installation: cavitation_module.Installation | None = None
@@ -102,6 +104,7 @@ class AnalysisResult:
             "cote_aspiration": self.suction.to_dict() if self.suction else None,
             "carte_d_occupation": self.occupancy.summary() if self.occupancy else None,
             "topologie": self.topology.to_dict() if self.topology else None,
+            "forme_des_aubes": self.blade_loops.to_dict() if self.blade_loops else None,
             "pales": self.blades.to_dict() if self.blades else None,
             "sens_de_sortie_du_liquide": self.discharge,
             "installation": self.installation.to_dict() if self.installation else None,
@@ -176,6 +179,12 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     result.warnings.extend(topology.blades.warnings)
     result.confidence.update(topology.confidence)
 
+    # Forme des aubes : une aube qui se referme sur elle-meme invalide tout ce
+    # que la phase 4 en tirerait, la coupe la traversant deux fois.
+    loops = loops_module.detect_looped_blades(occupancy, topology.blades.n_blades)
+    result.blade_loops = loops
+    result.warnings.extend(loops.warnings)
+
     # Phase 4 : coupes, angles de pale, sens de rotation.
     sections = sections_module.extract_sections(aligned, occupancy, topology)
     geometry = blade_module.analyse(
@@ -228,6 +237,12 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
             )
     if not result.discharge:
         result.discharge = blade_module.discharge_direction(topology, geometry)
+
+    # En dernier, car les phases 5 et 6 reposent leur propre confiance : une aube
+    # en boucle ne rend pas ces grandeurs incertaines, elle les rend sans objet.
+    if loops.looped:
+        for quantity in loops_module.INVALIDATED_BY_LOOP:
+            result.confidence.set(quantity, LOW)
 
     result.elapsed_s = time.time() - started
     return result

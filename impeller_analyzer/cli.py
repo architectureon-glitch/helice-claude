@@ -139,6 +139,7 @@ def summarise(result, produced: dict[str, str]) -> str:
     lines = []
     topology = result.topology
     blades = result.blades
+    looped = result.blade_loops is not None and result.blade_loops.looped
     if topology is not None and blades is not None:
         lines.append(
             f"Roue {topology.machine_type}, {topology.blades.n_blades} pales, "
@@ -146,6 +147,13 @@ def summarise(result, produced: dict[str, str]) -> str:
             f"beta1/beta2 = {blades.beta1_deg:.1f}/{blades.beta2_deg:.1f} deg"
         )
         lines.append(f"Sens de rotation : {blades.rotation_label}")
+    if looped:
+        # Le premier chiffre lu est celui qu'on croit : autant dire tout de suite
+        # que la suite du resume ne decrit pas cette roue.
+        lines.append(
+            "ATTENTION : aubes en boucle fermee (type toroidal). Les angles de pale et tout "
+            "ce qui en derive ci-dessous ne sont pas applicables -- voir le rapport."
+        )
     for curve in result.curves:
         point = curve.nominal_point()
         if point is None:
