@@ -17,10 +17,18 @@ vaut `-sin(beta) e_u + cos(beta) e_m`. D'ou
 
     tan(beta) = |N_u| / |N_m|
 
-face par face, pondere par les aires. Les faces d'intrados et d'extrados
-portent des normales opposees, mais leurs deux composantes changent de signe
-ensemble : le **rapport** garde son signe, qui donne le sens d'enroulement de
-l'aube et donc le sens de rotation.
+face par face, pondere par les aires.
+
+Le **sens** d'enroulement ne se lit pas sur ces normales. Le rapport `N_u / N_r`
+le donnerait en principe, intrados et extrados changeant de signe ensemble, mais
+sur une aube helicoidale la composante radiale devient minuscule devant la
+composante axiale et son signe n'est plus que du bruit : sur la roue de
+reference il basculait d'une grille a l'autre. Il se lit donc sur la grandeur
+qui le definit, la derive azimutale de l'aube avec le rayon. Multiplier l'azimut
+par le nombre d'aubes replie les N aubes sur une seule, la moyenne circulaire
+ponderee par les aires donne leur position commune couronne par couronne, et le
+signe de sa derive est le sens cherche. Cette lecture-la ne bouge pas d'une
+grille a l'autre.
 
 Restent a ecarter les **chants** de l'aube, ces bandes etroites ou elle vient
 mourir contre le moyeu et le flasque : elles ne portent aucun angle et tirent la
@@ -58,6 +66,7 @@ class NormalAngles:
     beta1_deg: float = 0.0
     beta2_deg: float = 0.0
     slope_sign: int = 0
+    wrap_drift_deg: float = 0.0  # derive azimutale totale de l'aube, repliee sur une pale
     area_1: float = 0.0  # aire de pale exploitee a l'entree, en m2
     area_2: float = 0.0  # aire de pale exploitee a la sortie, en m2
     stations: list[tuple[float, float]] = field(default_factory=list)  # (rayon, beta)
@@ -70,6 +79,7 @@ class NormalAngles:
             "beta1_deg": self.beta1_deg,
             "beta2_deg": self.beta2_deg,
             "signe_d_enroulement": self.slope_sign,
+            "derive_azimutale_deg": self.wrap_drift_deg,
             "aire_entree_m2": self.area_1,
             "aire_sortie_m2": self.area_2,
             "stations": [{"rayon_m": r, "beta_deg": b} for r, b in self.stations],
@@ -167,16 +177,64 @@ def band_beta(
 
         weighted += area * math.degrees(math.atan2(abs(n_u), n_m))
         area_total += area
-        # Le signe se lit sur le rapport a la composante meridienne : intrados et
-        # extrados portent des normales opposees, mais leurs deux composantes
-        # changent de signe ensemble, donc le rapport garde le sien.
-        reference = n_r if axial_span else nz
-        if abs(reference) > config.NORMAL_SIGN_MIN:
-            signed += area * (1.0 if n_u / reference > 0.0 else -1.0)
-
     if area_total <= 0.0:
         return 0.0, 0, 0.0
-    return weighted / area_total, (1 if signed >= 0.0 else -1), area_total
+    return weighted / area_total, 0, area_total
+
+
+def wrap_drift(
+    mesh: TriMesh,
+    occupancy: OccupancyMap,
+    blade_mask: list[list[bool]],
+    n_blades: int,
+    r_low: float,
+    r_high: float,
+) -> float:
+    """Derive azimutale totale de l'aube entre `r_low` et `r_high`, en radians.
+
+    Positive si l'aube s'enroule dans le sens direct quand le rayon croit.
+    """
+    if n_blades <= 0 or r_high <= r_low:
+        return 0.0
+    bands = config.WRAP_SENSE_BANDS
+    sums = [[0.0, 0.0] for _ in range(bands)]
+    for i, j, k in mesh.faces:
+        a, b, c = mesh.vertices[i], mesh.vertices[j], mesh.vertices[k]
+        cx = (a[0] + b[0] + c[0]) / 3.0
+        cy = (a[1] + b[1] + c[1]) / 3.0
+        cz = (a[2] + b[2] + c[2]) / 3.0
+        radius = math.hypot(cx, cy)
+        if radius <= 0.0 or not (r_low <= radius <= r_high):
+            continue
+        if not blade_mask[occupancy.axial_index(cz)][occupancy.radial_index(radius)]:
+            continue
+        ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+        vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+        nx = uy * vz - uz * vy
+        ny = uz * vx - ux * vz
+        nz = ux * vy - uy * vx
+        area = 0.5 * math.sqrt(nx * nx + ny * ny + nz * nz)
+        band = min(bands - 1, int(bands * (radius - r_low) / (r_high - r_low)))
+        folded = n_blades * math.atan2(cy, cx)
+        sums[band][0] += area * math.cos(folded)
+        sums[band][1] += area * math.sin(folded)
+
+    angles = [
+        math.atan2(sin_sum, cos_sum)
+        for cos_sum, sin_sum in sums
+        if cos_sum or sin_sum
+    ]
+    if len(angles) < config.WRAP_SENSE_MIN_BANDS:
+        return 0.0
+    unwrapped = [angles[0]]
+    for angle in angles[1:]:
+        delta = angle - unwrapped[-1]
+        while delta > math.pi:
+            delta -= 2.0 * math.pi
+        while delta < -math.pi:
+            delta += 2.0 * math.pi
+        unwrapped.append(unwrapped[-1] + delta)
+    return unwrapped[-1] - unwrapped[0]
 
 
 def analyse(
@@ -217,29 +275,39 @@ def analyse(
         if area > 0.0:
             result.stations.append((low + 0.5 * width, beta))
 
-    beta1, sign1, result.area_1 = band_beta(
+    beta1, _, result.area_1 = band_beta(
         mesh, occupancy, blade_mask, runs, r_low, r_low + width, not axial
     )
-    beta2, sign2, result.area_2 = band_beta(
+    beta2, _, result.area_2 = band_beta(
         mesh, occupancy, blade_mask, runs, r_high - width, r_high, not axial
     )
     result.beta1_deg, result.beta2_deg = beta1, beta2
-    result.slope_sign = sign2 if sign2 else sign1
+
+    drift = wrap_drift(mesh, occupancy, blade_mask, topology.blades.n_blades, r_low, r_high)
+    result.wrap_drift_deg = math.degrees(drift)
+    result.slope_sign = 1 if drift >= 0.0 else -1
 
     if result.area_1 <= 0.0 or result.area_2 <= 0.0:
         result.notes.append(
             "aucune face de pale dans la couronne d'entree ou de sortie : angles non mesurables"
         )
         return result
-    result.confidence = MEDIUM if sign1 == sign2 else LOW
+    clear = abs(result.wrap_drift_deg) >= config.WRAP_SENSE_MIN_DEG
+    result.confidence = MEDIUM if clear else LOW
     result.notes.append(
         f"beta lus sur les normales de la surface d'aube, sur {len(result.stations)} couronnes "
         f"entre {r_low * config.MM_PER_M:.1f} et {r_high * config.MM_PER_M:.1f} mm ; methode "
         "basse de 2 a 5 degres sur des roues d'angles connus, biais non corrige"
     )
-    if sign1 != sign2:
+    result.notes.append(
+        f"sens d'enroulement lu sur la derive azimutale de l'aube : "
+        f"{result.wrap_drift_deg:+.0f} degres entre l'ouie et le refoulement, aubes repliees "
+        f"sur une seule"
+    )
+    if not clear:
         result.notes.append(
-            "le sens d'enroulement differe entre l'entree et la sortie : aube fortement "
-            "vrillee, ou lecture perturbee"
+            f"derive azimutale de {abs(result.wrap_drift_deg):.0f} degres seulement, sous les "
+            f"{config.WRAP_SENSE_MIN_DEG:.0f} degres requis : aubes presque radiales, le sens de "
+            "rotation n'est pas tranche"
         )
     return result

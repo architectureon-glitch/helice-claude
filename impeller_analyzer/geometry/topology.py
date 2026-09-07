@@ -404,10 +404,27 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
         heights = [occupancy.z_centres[iz] for iz in range(nz) if blade[iz][column]]
         topology.b_2 = (max(heights) - min(heights) + occupancy.dz) if heights else occupancy.dz
         topology.area_2 = 2.0 * math.pi * topology.r_2 * topology.b_2 * config.TAU_2
-    else:
+    elif topology.r_2h > 0.0:
         topology.r_2 = math.sqrt((topology.r_2s ** 2 + topology.r_2h ** 2) / 2.0)
         topology.b_2 = topology.r_2s - topology.r_2h
         topology.area_2 = math.pi * (topology.r_2s ** 2 - topology.r_2h ** 2) * config.TAU_2
+    else:
+        # Le rayon quadratique moyen suppose une veine annulaire bordee par un
+        # moyeu. Sans moyeu au plan de sortie il degenere en r_2s / racine(2),
+        # qui n'est pas un rayon de refoulement mais un artefact de formule : sur
+        # la roue toroidale de reference il donnait 118 mm pour des aubes qui
+        # vont a 167, et faisait basculer u2 d'un tiers selon que la roue etait
+        # classee mixte ou centrifuge -- deux familles que son rapport r2/r1s
+        # separe justement a un millieme pres.
+        topology.r_2 = topology.r_blade_tip or topology.r_2s
+        column = occupancy.radial_index(config.B2_RADIUS_FRACTION * topology.r_2)
+        heights = [occupancy.z_centres[iz] for iz in range(nz) if blade[iz][column]]
+        topology.b_2 = (max(heights) - min(heights) + occupancy.dz) if heights else occupancy.dz
+        topology.area_2 = 2.0 * math.pi * topology.r_2 * topology.b_2 * config.TAU_2
+        topology.warnings.append(
+            "pas de moyeu au plan de sortie : le rayon de refoulement est pris au bout des "
+            "aubes, la moyenne quadratique moyeu-carter n'ayant pas de sens sans moyeu"
+        )
 
     level = HIGH
     if topology.area_1 <= 0.0 or topology.area_2 <= 0.0:
@@ -424,6 +441,17 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
         topology.ratio_r2_r1s - config.R_RATIO_MIXED_MAX
     ) < config.VALID_GEOM_TOL:
         level = worst(level, MEDIUM)
+        if abs(topology.ratio_r2_r1s - config.R_RATIO_MIXED_MAX) < config.VALID_GEOM_TOL:
+            # Les deux familles n'appliquent pas la meme regle de sens de rotation :
+            # a cheval sur la frontiere, le sens annonce est un tirage au sort.
+            topology.warnings.append(
+                f"rapport r2/r1s = {topology.ratio_r2_r1s:.3f} a un millieme de la frontiere "
+                "mixte / centrifuge, or les deux familles donnent des sens de rotation "
+                "**opposes** : le sens annonce n'est pas tranche par la geometrie. Verifiez-le "
+                "sur la vue 3D, ou au doigt sur la piece -- une aube de pompe fuit le sens de "
+                "rotation quand le rayon croit."
+            )
+            topology.confidence.set("sens_de_rotation", LOW)
         topology.warnings.append(
             f"rapport r2/r1s = {topology.ratio_r2_r1s:.3f} a la frontiere de deux familles : "
             "le type de roue est incertain"

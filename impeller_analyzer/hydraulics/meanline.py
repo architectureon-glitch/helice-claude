@@ -336,6 +336,35 @@ def curves_for_speeds(
     return [build_curve(data, rpm, confidence) for rpm in speeds]
 
 
+def head_sensitivity(data: "MeanlineInput", rpm: float) -> float:
+    """Variation relative de la hauteur nominale pour +/- 1 degre sur beta2.
+
+    La hauteur d'Euler passe par `cu2 = u2 - cm2 / tan(beta2)`. Aux petits
+    angles la tangente varie tres vite : sur une aube tres couchee, un degre
+    d'incertitude sur beta2 -- l'ordre de grandeur de ce que sait faire
+    n'importe quelle lecture geometrique -- peut deplacer la hauteur bien
+    au-dela des 18 % annonces par le modele. Autant le mesurer et le dire.
+
+    Renvoie l'ecart relatif entre les hauteurs nominales obtenues a
+    `beta2 - 1 deg` et `beta2 + 1 deg`, rapporte a la hauteur centrale, et
+    l'infini si un degre suffit a faire disparaitre le point de fonctionnement.
+    """
+    import dataclasses
+
+    heads = []
+    for delta in (-config.BETA_SENSITIVITY_DEG, 0.0, config.BETA_SENSITIVITY_DEG):
+        beta2 = data.beta2_deg + delta
+        if not 0.0 < beta2 < 90.0:
+            return math.inf
+        curve = build_curve(dataclasses.replace(data, beta2_deg=beta2), rpm, ConfidenceMap())
+        point = curve.nominal_point()
+        if point is None or point.head <= 0.0:
+            return math.inf
+        heads.append(point.head)
+    low, middle, high = heads
+    return abs(high - low) / middle if middle > 0.0 else math.inf
+
+
 def confidence_of(topology: Topology, geometry: BladeGeometry) -> ConfidenceMap:
     """Confiance heritee par les grandeurs hydrauliques (propagation pessimiste)."""
     level = worst(

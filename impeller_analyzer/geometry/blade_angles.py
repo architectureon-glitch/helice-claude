@@ -708,9 +708,11 @@ def analyse(
         geometry.notes.append(
             f"{geometry.n_families} familles de profils par coupe : l'ecoulement voit "
             f"{geometry.n_effective_blades} surfaces de pale par tour pour "
-            f"{topology.blades.n_blades} aubes. beta1 et beta2 sont lus sur la famille la plus "
-            "etendue le long de la veine ; le glissement et l'obstruction utilisent le nombre "
-            "effectif."
+            f"{topology.blades.n_blades} aubes. beta1 et beta2 sont lus sur la famille de plus "
+            "grande portee **radiale**, celle qui conduit l'ecoulement de l'ouie au refoulement ; "
+            "les autres sont des accidents locaux. Le glissement, lui, se calcule au refoulement, "
+            f"ou les brins d'une meme aube ont fusionne : il garde {topology.blades.n_blades} "
+            "passages."
         )
 
     if not per_section:

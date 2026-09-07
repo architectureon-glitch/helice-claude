@@ -235,6 +235,40 @@ tombait à 1,04, la roue était classée *axiale*, β2 valait 9,7°, la hauteur
 d'Euler devenait négative et l'outil ne trouvait aucun point de fonctionnement.
 Avec l'ouïe, le rapport vaut 1,80 et la sortie redevient radiale.
 
+### Sans moyeu, la moyenne quadratique moyeu-carter n'a pas de sens
+
+Pour une roue mixte ou axiale, la SPEC prend `r2 = √((r2s² + r2h²) / 2)` — le
+rayon quadratique moyen d'une veine annulaire bordée par un moyeu. Sans moyeu au
+plan de sortie, `r2h = 0` et la formule dégénère en `r2s / √2`, qui n'est pas un
+rayon de refoulement mais un artefact. Sur une roue d'essai à aubes courant
+jusqu'à 89,6 mm, elle donnait 39,5. `r2` est donc pris au bout des aubes dans ce
+cas, avec un avertissement.
+
+L'enjeu dépassait la définition. Sur l'hélice toroïdale de référence, le rapport
+`r2/r1s` vaut **1,800** pour un seuil mixte/centrifuge à **1,80** : selon le pas
+de grille, la roue basculait d'une famille à l'autre, et avec elle `r2` de 167 à
+118 mm — un tiers sur `u2`, deux tiers sur la hauteur. Le rapport annonçait
+sereinement deux résultats contradictoires pour le même fichier. La correction
+stabilise `r2` à 166,7–167,1 mm sur des grilles de 100 à 180.
+
+Reste que les deux familles appliquent des règles de **sens de rotation
+opposées** (`ω = +signe(k)` pour l'axial et le mixte, `−signe(dθ/dr)` pour le
+centrifuge). À cheval sur la frontière, le sens annoncé est un tirage au sort :
+il est désormais signalé comme tel, et sa confiance forcée au plus bas.
+
+### La hauteur est-elle seulement calculable ?
+
+`cu2 = u2 − cm2 / tan β2`. Aux petits angles la tangente varie très vite, et un
+degré d'incertitude sur β2 — l'ordre de grandeur de ce que sait faire n'importe
+quelle lecture géométrique — peut déplacer la hauteur bien au-delà des ±18 %
+annoncés. Plutôt que de laisser croire à une précision qu'il n'a pas, l'outil
+**mesure** cette sensibilité : il recalcule le point nominal à β2 ± 1° et compare.
+Au-delà de 18 % d'écart, il le dit avec le chiffre ; si un degré suffit à faire
+disparaître le point de fonctionnement, il le dit aussi. Sur l'hélice toroïdale,
+β2 vaut 4° et l'écart atteint **89 %** — hauteur et puissance n'y sont que des
+ordres de grandeur, alors que le débit et le NPSHr, qui n'en dépendent pas de la
+même façon, restent stables à 1 % près.
+
 ### Le rayon de sortie est celui des pales, pas de la matière
 
 Une roue de pompe semi-ouverte est ouverte à l'avant et **fermée au dos** : les
@@ -359,7 +393,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-174 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+177 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture

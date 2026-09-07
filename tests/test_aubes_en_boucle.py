@@ -92,6 +92,20 @@ class TestAnglesParNormales(BaseTestCase):
         direct = self._angles(synthetic.centrifugal_impeller(sense=1))
         inverse = self._angles(synthetic.centrifugal_impeller(sense=-1))
         self.assertEqual(direct.slope_sign, -inverse.slope_sign)
+        # La derive azimutale doit etre franche, pas un signe arrache au bruit.
+        self.assertGreater(abs(direct.wrap_drift_deg), config.WRAP_SENSE_MIN_DEG)
+        self.assertGreater(abs(inverse.wrap_drift_deg), config.WRAP_SENSE_MIN_DEG)
+
+    def test_le_sens_ne_depend_pas_du_pas_de_grille(self):
+        """Le sens d'enroulement doit etre le meme d'une grille a l'autre.
+
+        Lu sur la composante radiale des normales il basculait : sur une aube
+        helicoidale cette composante est minuscule et son signe n'est que du
+        bruit. Lu sur la derive azimutale, il tient.
+        """
+        roue = synthetic.toroidal_propeller(n_blades=3)
+        signes = {self._angles(roue, grid=g).slope_sign for g in (100, 130, 160)}
+        self.assertEqual(len(signes), 1, f"sens instable selon la grille : {signes}")
 
     def test_insensible_au_pas_de_grille(self):
         """Deux grilles differentes doivent donner le meme angle."""
@@ -142,12 +156,50 @@ class TestConsequences(BaseTestCase):
         self.assertAlmostEqual(result.blades.beta1_deg, 18.0, places=6)
         self.assertAlmostEqual(result.blades.beta2_deg, 27.0, places=6)
 
+    def test_sans_moyeu_le_rayon_de_sortie_est_celui_des_aubes(self):
+        """La moyenne quadratique moyeu-carter n'a pas de sens sans moyeu.
+
+        Elle degenere alors en r_2s / racine(2). Sur la roue toroidale de
+        reference elle donnait 118 mm pour des aubes allant a 167, et la valeur
+        basculait selon que le rapport r2/r1s tombait d'un cote ou de l'autre de
+        la frontiere mixte / centrifuge, a un millieme pres -- soit un tiers sur
+        u2 et deux tiers sur la hauteur, au gre du pas de grille.
+        """
+        import math
+
+        roue = synthetic.centrifugal_impeller(
+            front_shroud=True, flat_shroud=True, r1=0.055, r2=0.090, b1=0.014, b2=0.010
+        )
+        aligned, _ = axis_mod.align_to_z(roue)
+        occupancy = occ_mod.build_occupancy(aligned, nr=120, nz=120, n_theta=240)
+        result = topo.analyse(occupancy, None)
+
+        self.assertEqual(result.machine_type, topo.MIXED)  # la branche visee
+        self.assertEqual(result.r_2h, 0.0)  # et sans moyeu au plan de sortie
+        self.assertClose(result.r_2, result.r_blade_tip, rel=1e-12)
+        self.assertGreater(result.r_2, 2.0 * result.r_2s / math.sqrt(2.0))
+        self.assertTrue(any("moyeu au plan de sortie" in w for w in result.warnings))
+
     def test_la_geometrie_reste_exploitable(self):
         """Axe, nombre d'aubes et rayons ne dependent pas de la forme des aubes."""
         result = self._run(synthetic.toroidal_propeller(n_blades=3, r_tip=0.100))
         self.assertEqual(result.topology.blades.n_blades, 3)
         self.assertClose(result.topology.r_tip, 0.100, rel=0.05)
         self.assertLess(result.axis.angle_to_z_deg, 1.0)
+
+    def test_la_sensibilite_a_beta2_est_chiffree(self):
+        """Quand un degre sur beta2 fait bouger la hauteur, il faut le dire, pas le taire."""
+        from impeller_analyzer.hydraulics import meanline
+
+        result = self._run(synthetic.toroidal_propeller(n_blades=3))
+        self.assertGreaterEqual(result.head_sensitivity, 0.0)
+        if result.head_sensitivity > config.BETA_SENSITIVITY_ALERT:
+            self.assertTrue(any("hypersensible" in m for m in result.warnings))
+        # Une roue ordinaire, aux aubes franchement inclinees, ne doit pas la declencher.
+        sage = self._run(synthetic.centrifugal_impeller(beta1_deg=22.0, beta2_deg=25.0))
+        self.assertLess(sage.head_sensitivity, config.BETA_SENSITIVITY_ALERT)
+        self.assertFalse(any("hypersensible" in m for m in sage.warnings))
+        del meanline
 
     def test_le_rapport_porte_la_mention_non_applicable(self):
         """Le tableau des performances doit etre desamorce dans le rapport."""

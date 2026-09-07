@@ -7,6 +7,7 @@ rapports ne connaissent que sa sortie.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -83,6 +84,7 @@ class AnalysisResult:
     blade_normals: normals_module.NormalAngles | None = None
     meanline_input: meanline_module.MeanlineInput | None = None
     curves: list[meanline_module.PerformanceCurve] = field(default_factory=list)
+    head_sensitivity: float = 0.0  # ecart relatif de hauteur pour +/- 1 deg sur beta2
     installation: cavitation_module.Installation | None = None
     speed_limit: cavitation_module.SpeedLimit | None = None
     similarity: similarity_module.SimilarityCheck | None = None
@@ -106,6 +108,10 @@ class AnalysisResult:
             "cote_aspiration": self.suction.to_dict() if self.suction else None,
             "carte_d_occupation": self.occupancy.summary() if self.occupancy else None,
             "topologie": self.topology.to_dict() if self.topology else None,
+            # `None` quand un degre suffit a supprimer le point : JSON ne prend pas l'infini.
+            "sensibilite_hauteur_a_beta2": (
+                self.head_sensitivity if math.isfinite(self.head_sensitivity) else None
+            ),
             "forme_des_aubes": self.blade_loops.to_dict() if self.blade_loops else None,
             "angles_par_normales": self.blade_normals.to_dict() if self.blade_normals else None,
             "pales": self.blades.to_dict() if self.blades else None,
@@ -282,6 +288,25 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     if not result.discharge:
         result.discharge = blade_module.discharge_direction(topology, geometry)
 
+
+    if curves:
+        result.head_sensitivity = meanline_module.head_sensitivity(data, curves[0].rpm)
+        if result.head_sensitivity == float("inf"):
+            result.warnings.append(
+                f"hauteur hypersensible a beta2 : un degre d'ecart suffit a faire disparaitre le "
+                f"point de fonctionnement. beta2 vaut {data.beta2_deg:.1f} deg, et aux petits "
+                "angles cu2 = u2 - cm2/tan(beta2) varie tres vite. Hauteur et puissance ne sont "
+                "pas exploitables ; le debit et le NPSHr, qui n'en dependent pas de la meme "
+                "facon, restent fiables."
+            )
+        elif result.head_sensitivity > config.BETA_SENSITIVITY_ALERT:
+            result.warnings.append(
+                f"hauteur hypersensible a beta2 : un degre d'ecart la deplace de "
+                f"{result.head_sensitivity:.0%}, bien au-dela des 18 % annonces par le modele. "
+                f"beta2 vaut {data.beta2_deg:.1f} deg, et aux petits angles cu2 = u2 - cm2/tan(beta2) "
+                "varie tres vite. Hauteur et puissance sont a lire comme des ordres de grandeur ; "
+                "le debit et le NPSHr, qui n'en dependent pas de la meme facon, restent fiables."
+            )
 
     result.elapsed_s = time.time() - started
     return result
