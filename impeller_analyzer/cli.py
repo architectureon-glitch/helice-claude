@@ -151,8 +151,8 @@ def summarise(result, produced: dict[str, str]) -> str:
         # Le premier chiffre lu est celui qu'on croit : autant dire tout de suite
         # que la suite du resume ne decrit pas cette roue.
         lines.append(
-            "ATTENTION : aubes en boucle fermee (type toroidal). Les angles de pale et tout "
-            "ce qui en derive ci-dessous ne sont pas applicables -- voir le rapport."
+            "Aubes en boucle fermee (type toroidal) : beta1 et beta2 sont lus sur les normales "
+            "de la surface, la cambrure ne s'appliquant pas. Voir les reserves du rapport."
         )
     for curve in result.curves:
         point = curve.nominal_point()

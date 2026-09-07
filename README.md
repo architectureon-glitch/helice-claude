@@ -170,6 +170,51 @@ couple, rendement et NPSHr passent en confiance basse. Axe, nombre d'aubes,
 rayons, sections et volumes restent valables : ils ne passent pas par la
 cambrure.
 
+### Calculer une roue dont les aubes sont des boucles
+
+Reconnue toroïdale, la roue n'est pas abandonnée : la lecture des angles bascule
+sur une autre méthode. La cambrure n'a pas de réponse stable sur cette forme —
+selon l'envergure où l'on coupe, on obtient le contour de la boucle entière
+(aller et retour en un seul tour fermé), un seul brin, ou le bourrelet où les
+deux brins fusionnent ; sur la roue de référence β2 vaut 8° près du plateau et
+89° au milieu de la veine. Ce n'est pas un défaut de mise en œuvre, c'est la
+limite du domaine du modèle.
+
+`geometry/blade_normals.py` mesure autrement, localement, sans jamais apparier
+deux faces. Une surface de pale ne contient pas sa propre normale : si l'aube
+fait l'angle β avec la direction tangentielle, sa normale vaut
+`−sin β · e_u + cos β · e_m`, d'où **tan β = |N_u| / |N_m|**, face par face,
+pondéré par les aires. Intrados et extrados portent des normales opposées, mais
+leurs deux composantes changent de signe ensemble : le *rapport* garde le sien,
+ce qui donne le sens d'enroulement et donc le sens de rotation.
+
+Restent à écarter les **chants**, ces bandes étroites où l'aube meurt contre le
+moyeu et le flasque : elles ne portent aucun angle et tirent la moyenne vers le
+bas. Le tri est géométrique, pas directionnel — on écarte les faces trop proches
+des parois, la marge étant prise sur la plage *contiguë* qui contient la face et
+non sur l'étendue totale de la colonne, sans quoi elle enjamberait le vide entre
+les deux brins et les supprimerait tous les deux. Filtrer sur la direction de la
+normale serait plus simple mais ne marche pas : sur une aube hélicoïdale la
+surface porte elle-même une grande composante d'envergure, et le filtre qui
+nettoie une roue centrifuge ordinaire supprime alors *toutes* les faces.
+
+Portée et limites, mesurées sur des roues synthétiques d'angles imposés (β1/β2
+de 15/20 à 40/65) : la lecture est **basse de 2 à 5 degrés**, le sens
+d'enroulement est toujours juste, et le résultat ne bouge pas d'un degré entre
+une grille de 100 et une de 150. Le biais n'est **pas corrigé** : il n'a pas été
+expliqué, et le corriger d'après le seul générateur interne reviendrait à caler
+l'instrument sur lui-même. β2 reste le point faible sur une boucle — il est
+mesuré là où les deux brins fusionnent en un bout massif, qui bloque plus qu'il
+ne guide. `--beta1` et `--beta2` court-circuitent toute la lecture.
+
+Deux corrections d'appoint accompagnent ce chemin. Les profils d'une coupe sont
+désormais **regroupés en familles** de N copies périodiques, triées par
+enroulement : les mélanger donnait un angle qui ne décrivait aucune famille et
+un sens de cambrure qui basculait d'une coupe à la suivante. Et le plafond
+d'enroulement d'un profil passe de 180° à 300° — il est là pour rejeter les
+contours de révolution, qui font le tour complet, et il rejetait au passage des
+aubes réelles enroulées de 190°.
+
 ### Sur une roue fermée, l'entrée est le percement du flasque
 
 Le rayon d'aspiration se lit normalement sur l'extrémité des pales au plan
@@ -314,7 +359,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-169 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+174 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture
@@ -340,6 +385,7 @@ impeller_analyzer/
 ├── geometry/
 │   ├── axis.py          # détection de l'axe, recentrage, côté aspiration
 │   ├── blade_loops.py   # aubes en boucle fermée (type toroïdal)
+│   ├── blade_normals.py # angles lus sur les normales, quand la cambrure ne s'applique pas
 │   ├── occupancy.py     # carte f(r, z) — cœur du système
 │   ├── topology.py      # pales, rayons, type de roue, sections
 │   ├── proximity.py     # distance point-maillage, Hausdorff

@@ -47,6 +47,9 @@ class MeanlineInput:
             area_2=topology.area_2,
             beta1_deg=geometry.beta1_deg,
             beta2_deg=geometry.beta2_deg,
+            # Le glissement se calcule au refoulement. Sur une aube en boucle les
+            # deux brins y ont fusionne en un seul bord de fuite : le nombre de
+            # passages a la sortie reste le nombre d'aubes.
             n_blades=topology.blades.n_blades,
             rho=rho,
         )

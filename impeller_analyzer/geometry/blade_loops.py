@@ -146,8 +146,8 @@ def detect_looped_blades(
         f"{result.r_inner * config.MM_PER_M:.1f} a {result.r_outer * config.MM_PER_M:.1f} mm, "
         f"une coupe a azimut fixe traverse l'aube deux fois sur "
         f"{result.peak_fraction:.0%} des azimuts{fusion}. Chaque aube a donc deux brins et non "
-        "un bord d'attaque et un bord de fuite : la cambrure, beta1, beta2, le sens de rotation "
-        "et tout ce qui en derive -- hauteur, debit, puissance, NPSHr -- ne sont pas applicables. "
-        "Axe, nombre d'aubes, rayons, sections et volumes restent valables."
+        "un bord d'attaque et un bord de fuite : la cambrure, qui suppose l'inverse, est mise de "
+        "cote, et les angles de pale sont lus sur les normales de la surface (voir plus bas). "
+        "Axe, nombre d'aubes, rayons, sections et volumes ne sont pas concernes."
     )
     return result

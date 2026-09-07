@@ -154,12 +154,14 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
         # Une aube en boucle sort du domaine de la SPEC : le tableau est conserve
         # pour ce qu'il vaut, mais il ne doit pas etre lu comme une performance.
         lines.append(
-            "> **Non applicable.** Les aubes se referment sur elles-memes (type toroidal) : "
-            "le modele de ligne moyenne suppose un bord d'attaque et un bord de fuite uniques, "
-            "et les angles de pale dont derive tout ce tableau ont ete lus entre les deux brins "
-            "d'une meme boucle. Les valeurs ci-dessous sont celles qu'aurait donnees une aube "
-            "simple de meme trace ; **elles ne decrivent pas cette roue** et ne doivent servir "
-            "ni au dimensionnement ni a la comparaison."
+            "> **A prendre avec des reserves plus larges que d'ordinaire.** Les aubes se "
+            "referment sur elles-memes (type toroidal). La cambrure, qui suppose un bord "
+            "d'attaque et un bord de fuite uniques, n'a pas de reponse stable sur cette forme : "
+            "beta1 et beta2 sont donc lus sur les **normales de la surface d'aube**, methode "
+            "basse de 2 a 5 degres sur des roues d'angles connus. beta2 est le point faible : "
+            "il est mesure la ou les deux brins fusionnent en un bout massif, qui bloque plus "
+            "qu'il ne guide. Si vous connaissez les angles de dessin, imposez-les par --beta1 "
+            "et --beta2 : toute la geometrie autour est juste, seuls les angles sont fragiles."
         )
         lines.append("")
     header, rows = performance_table(result)

@@ -15,6 +15,7 @@ from .confidence import LOW, ConfidenceMap, worst
 from .geometry import axis as axis_module
 from .geometry import blade_angles as blade_module
 from .geometry import blade_loops as loops_module
+from .geometry import blade_normals as normals_module
 from .geometry import occupancy as occupancy_module
 from .geometry import sections as sections_module
 from .geometry import topology as topology_module
@@ -79,6 +80,7 @@ class AnalysisResult:
     topology: topology_module.Topology | None = None
     blades: blade_module.BladeGeometry | None = None
     blade_loops: loops_module.LoopResult | None = None
+    blade_normals: normals_module.NormalAngles | None = None
     meanline_input: meanline_module.MeanlineInput | None = None
     curves: list[meanline_module.PerformanceCurve] = field(default_factory=list)
     installation: cavitation_module.Installation | None = None
@@ -105,6 +107,7 @@ class AnalysisResult:
             "carte_d_occupation": self.occupancy.summary() if self.occupancy else None,
             "topologie": self.topology.to_dict() if self.topology else None,
             "forme_des_aubes": self.blade_loops.to_dict() if self.blade_loops else None,
+            "angles_par_normales": self.blade_normals.to_dict() if self.blade_normals else None,
             "pales": self.blades.to_dict() if self.blades else None,
             "sens_de_sortie_du_liquide": self.discharge,
             "installation": self.installation.to_dict() if self.installation else None,
@@ -191,8 +194,49 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
         sections, topology, forced_beta1_deg=options.beta1_deg, forced_beta2_deg=options.beta2_deg
     )
     result.blades = geometry
-    result.warnings.extend(geometry.warnings)
     result.confidence.update(geometry.confidence)
+    camber_warnings = list(geometry.warnings)
+
+    # Aube en boucle : la cambrure n'a pas de reponse stable, les normales si.
+    if loops.looped and options.beta1_deg is None and options.beta2_deg is None:
+        normals = normals_module.analyse(aligned, occupancy, topology)
+        result.blade_normals = normals
+        if normals.beta1_deg > 0.0 and normals.beta2_deg > 0.0:
+            geometry.beta1_deg = normals.beta1_deg
+            geometry.beta2_deg = normals.beta2_deg
+            geometry.rotation_sign = blade_module.rotation_sense(
+                topology.machine_type, normals.slope_sign
+            )
+            geometry.rotation_label = blade_module.rotation_label(geometry.rotation_sign)
+            geometry.notes.extend(normals.notes)
+            geometry.warnings.append(
+                f"aubes en boucle : beta1 = {normals.beta1_deg:.1f} deg et beta2 = "
+                f"{normals.beta2_deg:.1f} deg sont lus sur les normales de la surface d'aube, "
+                "la cambrure n'ayant pas de reponse stable sur cette forme. Methode basse de 2 a "
+                "5 degres sur des roues d'angles connus, biais non corrige ; imposez --beta1 et "
+                "--beta2 si vous les connaissez."
+            )
+            for quantity in ("angles_de_pale", "sens_de_rotation"):
+                result.confidence.set(quantity, normals.confidence)
+        else:
+            result.warnings.append(
+                "aubes en boucle et lecture par les normales infructueuse : les angles de pale "
+                "restent ceux de la cambrure, qui ne s'applique pas a cette forme. Imposez "
+                "--beta1 et --beta2."
+            )
+            for quantity in loops_module.INVALIDATED_BY_LOOP:
+                result.confidence.set(quantity, LOW)
+
+    if result.blade_normals is not None and result.blade_normals.beta2_deg > 0.0 and camber_warnings:
+        # Les reserves de la cambrure portent sur une lecture qui n'a pas ete
+        # retenue : les garder sans le dire ferait croire a un doute sur les
+        # angles publies.
+        result.warnings.append(
+            "les reserves qui suivent portent sur la lecture par la cambrure, mise de cote au "
+            "profit des normales ; elles n'entament pas les angles publies, elles expliquent "
+            "pourquoi la cambrure a ete ecartee"
+        )
+    result.warnings.extend(camber_warnings)
 
     # Phases 5 et 6 : hydraulique et cavitation.
     data = meanline_module.MeanlineInput.from_geometry(topology, geometry)
@@ -238,11 +282,6 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     if not result.discharge:
         result.discharge = blade_module.discharge_direction(topology, geometry)
 
-    # En dernier, car les phases 5 et 6 reposent leur propre confiance : une aube
-    # en boucle ne rend pas ces grandeurs incertaines, elle les rend sans objet.
-    if loops.looped:
-        for quantity in loops_module.INVALIDATED_BY_LOOP:
-            result.confidence.set(quantity, LOW)
 
     result.elapsed_s = time.time() - started
     return result

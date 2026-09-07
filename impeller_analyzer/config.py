@@ -116,8 +116,11 @@ MIN_BLADE_SECTIONS = 3  # coupes - nombre minimal de coupes exploitables pour un
 LOOP_DOUBLE_FRACTION = 0.50  # - - fraction des azimuts coupant l'aube deux fois au-dela de laquelle elle est une boucle
 LOOP_MIN_STATIONS = 3  # stations - nombre minimal de rayons dedoubles pour conclure a une boucle
 LOOP_MIN_SECTORS = 3  # secteurs - azimuts voyant de la pale, en deca desquels le rayon n'est pas exploite
+NORMAL_WALL_MARGIN = 0.15  # - - part de la hauteur de veine ecartee contre chaque paroi, ou l'aube n'a que des chants
+NORMAL_BAND_FRACTION = 0.10  # - - largeur relative des couronnes ou beta est moyenne, rapportee a r2-r1s
+NORMAL_SIGN_MIN = 1e-9  # - - composante de reference minimale pour attribuer un signe d'enroulement a une face
 SECTION_REFINE_STEPS = 6  # - - bissections de recalage d'un point de coupe sur la surface exacte
-SECTION_MAX_WRAP = 3.141592653589793  # rad - enroulement maximal d'un profil de pale (au-dela : contour de moyeu)
+SECTION_MAX_WRAP = 5.235987755982989  # rad - enroulement maximal d'un profil de pale, 300 deg (au-dela : contour de revolution, moyeu ou flasque, qui fait le tour complet)
 CHORD_THICKNESS_MIN = 2.0  # - - rapport corde/epaisseur en deca duquel un profil est juge mal conditionne
 
 # ---------------------------------------------------------------------------

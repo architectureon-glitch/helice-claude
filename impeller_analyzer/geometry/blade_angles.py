@@ -48,6 +48,10 @@ class SectionAngles:
     slope_sign: int = 0
     n_profiles: int = 0
     chord_to_thickness: float = 0.0
+    family: int = 0  # rang de la famille dans la coupe, 0 = la plus enroulee
+    n_families: int = 1
+    meridional_extent: float = 0.0  # etendue en m du profil le long de la veine
+    radial_span: float = 0.0  # portee radiale en m, du plus petit au plus grand rayon
 
     def to_dict(self) -> dict:
         """Vue serialisable en JSON (SI, angles en degres)."""
@@ -61,6 +65,10 @@ class SectionAngles:
             "pas_helicoidal_m": self.pitch,
             "profils": self.n_profiles,
             "corde_sur_epaisseur": self.chord_to_thickness,
+            "famille": self.family,
+            "familles": self.n_families,
+            "etendue_meridienne_m": self.meridional_extent,
+            "portee_radiale_m": self.radial_span,
         }
 
 
@@ -75,6 +83,8 @@ class BladeGeometry:
     chord: float = 0.0
     max_thickness: float = 0.0
     pitch: float = 0.0
+    n_families: int = 1  # familles de profils par coupe : 1 pour une aube simple
+    n_effective_blades: int = 0  # surfaces de pale vues par l'ecoulement sur un tour
     rotation_sign: int = 0  # +1 anti-horaire vu de +Z, -1 horaire
     rotation_label: str = ""
     helix_coefficient: float = 0.0  # k = dz/dtheta au rayon de reference, en m/rad
@@ -92,6 +102,8 @@ class BladeGeometry:
             "corde_m": self.chord,
             "epaisseur_max_m": self.max_thickness,
             "pas_helicoidal_m": self.pitch,
+            "familles_de_profils": self.n_families,
+            "aubes_effectives": self.n_effective_blades,
             "sens_de_rotation": self.rotation_label,
             "signe_de_rotation": self.rotation_sign,
             "coefficient_helicoidal_k_m_par_rad": self.helix_coefficient,
@@ -407,10 +419,30 @@ def _beta_from_slope(slope: float, curve: MeridionalCurve, reference_radius: flo
     return math.degrees(math.atan(abs(slope) * reference_radius / radius))
 
 
-def section_angles(section: Section, leading_edge_at_max: bool) -> tuple[SectionAngles, list[Camber]]:
-    """Angles de pale d'une coupe, medianes sur les profils de la coupe."""
+def section_angle_families(
+    section: Section, leading_edge_at_max: bool, n_blades: int
+) -> list[tuple[SectionAngles, list[Camber]]]:
+    """Angles de pale d'une coupe, une entree par famille de profils.
+
+    Une aube en boucle donne plusieurs familles sur une meme coupe ; les
+    moyenner ensemble donnerait un angle qui ne decrit aucune des deux.
+    """
+    families = section.families(n_blades)
+    out = []
+    for rank, profiles in enumerate(families):
+        angles, cambers = section_angles(section, leading_edge_at_max, profiles)
+        angles.family = rank
+        angles.n_families = len(families)
+        out.append((angles, cambers))
+    return out
+
+
+def section_angles(
+    section: Section, leading_edge_at_max: bool, profiles: list[Profile] | None = None
+) -> tuple[SectionAngles, list[Camber]]:
+    """Angles de pale d'une coupe, medianes sur les profils retenus."""
     result = SectionAngles(span=section.span, radius=section.reference_radius)
-    usable = section.usable()
+    usable = section.usable() if profiles is None else list(profiles)
     pairs = [(profile, camber_line(profile, leading_edge_at_max)) for profile in usable]
     pairs = [(profile, camber) for profile, camber in pairs if camber.valid]
     cambers = [camber for _, camber in pairs]
@@ -455,6 +487,12 @@ def section_angles(section: Section, leading_edge_at_max: bool) -> tuple[Section
     result.chord_to_thickness = result.chord / result.max_thickness if result.max_thickness > 0.0 else math.inf
     result.pitch = 2.0 * math.pi * result.radius * math.tan(math.radians(result.beta_mean_deg))
     result.slope_sign = 1 if sum(slope_signs) >= 0 else -1
+    result.meridional_extent = _median([
+        max(profile.meridional) - min(profile.meridional) for profile, _ in pairs
+    ])
+    result.radial_span = _median([
+        max(profile.radius) - min(profile.radius) for profile, _ in pairs
+    ])
     return result, cambers
 
 
@@ -644,11 +682,36 @@ def analyse(
     leading_edge_at_max = topology.machine_type != CENTRIFUGAL
 
     per_section: list[SectionAngles] = []
+    family_counts: list[int] = []
     for section in sections:
-        angles, _ = section_angles(section, leading_edge_at_max)
-        if angles.n_profiles:
-            per_section.append(angles)
+        families = [
+            angles
+            for angles, _ in section_angle_families(
+                section, leading_edge_at_max, topology.blades.n_blades
+            )
+            if angles.n_profiles
+        ]
+        if not families:
+            continue
+        family_counts.append(len(families))
+        # La famille retenue pour le modele 1D est celle de plus grande portee
+        # **radiale** : c'est la surface qui conduit l'ecoulement de l'ouie au
+        # refoulement. Les autres familles d'une coupe sont des accidents
+        # locaux -- sur la roue toroidale de reference, le bourrelet ou les deux
+        # brins fusionnent, qui ne couvre que les seize derniers millimetres de
+        # rayon et donnerait un angle sans rapport avec le guidage.
+        per_section.append(max(families, key=lambda angles: angles.radial_span))
     geometry.sections = per_section
+    geometry.n_families = int(_median(family_counts)) if family_counts else 1
+    geometry.n_effective_blades = topology.blades.n_blades * geometry.n_families
+    if geometry.n_families > 1:
+        geometry.notes.append(
+            f"{geometry.n_families} familles de profils par coupe : l'ecoulement voit "
+            f"{geometry.n_effective_blades} surfaces de pale par tour pour "
+            f"{topology.blades.n_blades} aubes. beta1 et beta2 sont lus sur la famille la plus "
+            "etendue le long de la veine ; le glissement et l'obstruction utilisent le nombre "
+            "effectif."
+        )
 
     if not per_section:
         geometry.confidence.set("angles_de_pale", LOW)

@@ -161,6 +161,29 @@ class Section:
             and profile.reference_wrap() < config.SECTION_MAX_WRAP
         ]
 
+    def families(self, n_blades: int) -> list[list[Profile]]:
+        """Regroupe les profils exploitables en familles de `n_blades` copies.
+
+        Une aube simple donne `n_blades` profils par coupe, tous semblables : ce
+        sont les copies periodiques d'une meme aube, et les moyenner est legitime.
+        Une aube en boucle en donne un multiple, et les familles y sont de formes
+        tres differentes -- sur la roue toroidale de reference, trois profils
+        enroules de 118 degres et trois de 48. Les moyenner ensemble donne un
+        angle qui ne decrit ni l'une ni l'autre, et un sens de cambrure qui
+        bascule d'une coupe a la suivante.
+
+        Le tri se fait sur l'enroulement, seule grandeur qui separe proprement
+        les familles, et le decoupage utilise le nombre d'aubes, connu par
+        ailleurs avec une bonne confiance. Si le compte n'est pas un multiple de
+        `n_blades`, la coupe est rendue en une seule famille : mieux vaut une
+        moyenne discutable qu'un decoupage invente.
+        """
+        profiles = self.usable()
+        if n_blades <= 0 or not profiles or len(profiles) % n_blades:
+            return [profiles] if profiles else []
+        ordered = sorted(profiles, key=lambda profile: profile.reference_wrap(), reverse=True)
+        return [ordered[i:i + n_blades] for i in range(0, len(ordered), n_blades)]
+
 
 def _profile_reference_wrap(self: Profile) -> float:
     """Etendue angulaire en radians du profil."""

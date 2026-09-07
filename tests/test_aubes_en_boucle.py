@@ -16,6 +16,7 @@ from impeller_analyzer.analysis import Options, run
 from impeller_analyzer.confidence import LOW
 from impeller_analyzer.geometry import axis as axis_mod
 from impeller_analyzer.geometry import blade_loops as loops
+from impeller_analyzer.geometry import blade_normals as normals
 from impeller_analyzer.geometry import occupancy as occ_mod
 from impeller_analyzer.geometry import topology as topo
 from impeller_analyzer.io import writer
@@ -66,6 +67,48 @@ class TestDetection(BaseTestCase):
                 self.assertEqual(topo.count_blades(occupancy).n_blades, n_blades)
 
 
+class TestAnglesParNormales(BaseTestCase):
+    """La methode de repli doit etre etalonnee sur des roues dont on sait les angles."""
+
+    def _angles(self, mesh, grid=GRID):
+        aligned, _ = axis_mod.align_to_z(mesh)
+        occupancy = occ_mod.build_occupancy(aligned, nr=grid, nz=grid, n_theta=360)
+        return normals.analyse(aligned, occupancy, topo.analyse(occupancy, None))
+
+    def test_etalonnage_sur_angles_connus(self):
+        """Sur des roues d'angles imposes, la lecture tient dans une fourchette etroite."""
+        for beta1, beta2 in ((22.0, 25.0), (35.0, 50.0), (40.0, 65.0), (15.0, 20.0)):
+            with self.subTest(beta=(beta1, beta2)):
+                got = self._angles(
+                    synthetic.centrifugal_impeller(beta1_deg=beta1, beta2_deg=beta2)
+                )
+                for measured, expected in ((got.beta1_deg, beta1), (got.beta2_deg, beta2)):
+                    # Le biais est du cote bas et n'a jamais depasse 5 degres.
+                    self.assertGreaterEqual(measured, expected - 5.0)
+                    self.assertLessEqual(measured, expected + 1.0)
+
+    def test_le_sens_d_enroulement_suit_la_roue(self):
+        """Retourner le sens des aubes doit retourner le signe lu."""
+        direct = self._angles(synthetic.centrifugal_impeller(sense=1))
+        inverse = self._angles(synthetic.centrifugal_impeller(sense=-1))
+        self.assertEqual(direct.slope_sign, -inverse.slope_sign)
+
+    def test_insensible_au_pas_de_grille(self):
+        """Deux grilles differentes doivent donner le meme angle."""
+        roue = synthetic.centrifugal_impeller(beta1_deg=22.0, beta2_deg=25.0)
+        fine = self._angles(roue, grid=150)
+        grossiere = self._angles(roue, grid=100)
+        self.assertClose(fine.beta2_deg, grossiere.beta2_deg, abs_=1.0)
+
+    def test_roue_axiale_renvoyee_a_la_cambrure(self):
+        """Sur une helice axiale la methode se declare hors sujet plutot que de repondre."""
+        got = self._angles(
+            synthetic.axial_impeller(n_blades=4, beta_deg=20.0, beta2_deg=35.0, blade_wrap_deg=70.0)
+        )
+        self.assertEqual(got.beta2_deg, 0.0)
+        self.assertTrue(any("axiale" in note for note in got.notes))
+
+
 class TestConsequences(BaseTestCase):
     def _run(self, mesh, **kwargs):
         path = self.path("helice.stl")
@@ -73,16 +116,31 @@ class TestConsequences(BaseTestCase):
         return run(path, Options(grid_nr=GRID, grid_nz=GRID, n_theta=240,
                                  symmetry_check=False, speeds=(1450.0,), **kwargs))
 
-    def test_les_grandeurs_derivant_de_la_cambrure_tombent_en_confiance_basse(self):
-        """Ce que la boucle invalide doit etre marque comme tel, pas presente comme sur."""
+    def test_les_angles_sont_repris_sur_les_normales(self):
+        """La boucle bascule la lecture des angles, elle ne l'abandonne pas."""
         result = self._run(synthetic.toroidal_propeller(n_blades=3))
         self.assertIsNotNone(result.blade_loops)
         self.assertTrue(result.blade_loops.looped)
-        for quantity in loops.INVALIDATED_BY_LOOP:
-            with self.subTest(grandeur=quantity):
-                self.assertEqual(result.confidence.get_level(quantity), LOW)
-        self.assertEqual(result.overall_confidence(), LOW)
         self.assertTrue(any("boucle" in message for message in result.warnings))
+
+        if result.topology.machine_type == topo.AXIAL:
+            self.skipTest("roue axiale : la cambrure s'applique, les normales ne sont pas requises")
+        self.assertIsNotNone(result.blade_normals)
+        angles = result.blade_normals
+        self.assertGreater(angles.beta1_deg, 0.0)
+        self.assertGreater(angles.beta2_deg, 0.0)
+        self.assertIn(angles.slope_sign, (-1, 1))
+        # Les angles retenus sont bien ceux des normales, pas ceux de la cambrure.
+        self.assertAlmostEqual(result.blades.beta1_deg, angles.beta1_deg, places=6)
+        self.assertAlmostEqual(result.blades.beta2_deg, angles.beta2_deg, places=6)
+        self.assertEqual(result.confidence.get_level("angles_de_pale"), angles.confidence)
+
+    def test_les_angles_imposes_priment_sur_les_normales(self):
+        """--beta1/--beta2 doit court-circuiter la lecture par les normales."""
+        result = self._run(synthetic.toroidal_propeller(n_blades=3), beta1_deg=18.0, beta2_deg=27.0)
+        self.assertIsNone(result.blade_normals)
+        self.assertAlmostEqual(result.blades.beta1_deg, 18.0, places=6)
+        self.assertAlmostEqual(result.blades.beta2_deg, 27.0, places=6)
 
     def test_la_geometrie_reste_exploitable(self):
         """Axe, nombre d'aubes et rayons ne dependent pas de la forme des aubes."""
@@ -99,7 +157,7 @@ class TestConsequences(BaseTestCase):
         chemin = report.write_markdown(result, self.workdir, source="helice.stl")
         with open(chemin, encoding="utf-8") as flux:
             texte = flux.read()
-        self.assertIn("Non applicable", texte)
+        self.assertIn("reserves", texte)
         self.assertIn("toroidal", texte)
 
 
