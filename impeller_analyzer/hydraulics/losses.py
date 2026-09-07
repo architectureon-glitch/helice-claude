@@ -46,6 +46,7 @@ class ChannelLosses:
     hydraulic_diameter: float = 0.0  # diametre hydraulique moyen, en m
     slenderness: float = 0.0  # L / D_h, sans dimension
     wetted_area: float = 0.0  # surface mouillee des aubes et des flasques, en m2
+    strands: int = 1  # brins par aube : 2 sur une aube en boucle
     w1: float = 0.0  # vitesse relative d'entree, en m/s
     w2: float = 0.0  # vitesse relative de sortie, en m/s
     de_haller: float = 0.0  # w2 / w1
@@ -62,6 +63,7 @@ class ChannelLosses:
             "diametre_hydraulique_m": self.hydraulic_diameter,
             "elancement_L_sur_Dh": self.slenderness,
             "surface_mouillee_m2": self.wetted_area,
+            "brins_par_aube": self.strands,
             "w1_m_par_s": self.w1,
             "w2_m_par_s": self.w2,
             "de_haller_w2_sur_w1": self.de_haller,
@@ -102,8 +104,14 @@ def analyse(
     w1: float,
     w2: float,
     head_theoretical: float,
+    strands: int = 1,
 ) -> ChannelLosses:
-    """Pertes geometriques et rendement de comparaison d'une roue."""
+    """Pertes geometriques et rendement de comparaison d'une roue.
+
+    `strands` est le nombre de brins que porte chaque aube : un pour une aube
+    ordinaire, deux pour une aube en boucle, qui presente donc deux fois la
+    surface de frottement pour le meme nombre de canaux.
+    """
     result = ChannelLosses(w1=w1, w2=w2, head_theoretical=head_theoretical)
     if min(r_1, r_2, b_1, b_2, w1, w2, head_theoretical) <= 0.0 or n_blades <= 0:
         result.warnings.append(
@@ -119,12 +127,21 @@ def analyse(
         result.warnings.append("diametre hydraulique nul : pertes de comparaison non calculees")
         return result
     result.slenderness = result.length / result.hydraulic_diameter
-    # Les deux faces de chaque aube, plus les deux flasques du canal.
-    result.wetted_area = n_blades * result.length * (2.0 * width + 2.0 * pitch)
+    # Les deux faces de chaque brin d'aube, plus les deux flasques du canal.
+    strands = max(1, strands)
+    result.strands = strands
+    faces = n_blades * strands * result.length * 2.0 * width
+    parois = n_blades * result.length * 2.0 * pitch
+    result.wetted_area = faces + parois
 
     w_mean = 0.5 * (w1 + w2)
+    # Darcy-Weisbach sur le canal, corrige du rapport de surface mouillee : une
+    # aube en boucle presente deux fois ses faces pour le meme canal.
+    reference = n_blades * result.length * (2.0 * width + 2.0 * pitch)
+    surface_ratio = result.wetted_area / reference if reference > 0.0 else 1.0
     result.head_friction = (
-        4.0 * config.C_F_CANAL * result.slenderness * w_mean ** 2 / (2.0 * config.G)
+        4.0 * config.C_F_CANAL * result.slenderness * surface_ratio
+        * w_mean ** 2 / (2.0 * config.G)
     )
 
     result.de_haller = w2 / w1 if w1 > 0.0 else 0.0

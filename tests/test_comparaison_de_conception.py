@@ -72,6 +72,27 @@ class TestPouvoirDiscriminant(BaseTestCase):
         self.assertClose(reduite.efficiency, grande.efficiency, abs_=0.01)
         self.assertClose(vite.efficiency, grande.efficiency, rel=1e-9)
 
+    def test_une_aube_en_boucle_coute_sa_surface_supplementaire(self):
+        """Deux brins pour un canal, c'est deux fois les faces a frotter."""
+        roue = synthetic.toroidal_propeller(n_blades=3)
+        result = self._losses(roue)
+        got = result.channel_losses
+        self.assertTrue(result.blade_loops.looped)
+        self.assertEqual(got.strands, 2)
+
+        # La meme roue comptee comme une aube simple frotterait moins.
+        simple = losses.analyse(
+            r_1=0.05, r_2=0.10, b_1=0.02, b_2=0.02, beta1_deg=20.0, beta2_deg=25.0,
+            n_blades=3, w1=10.0, w2=8.0, head_theoretical=15.0, strands=1,
+        )
+        boucle = losses.analyse(
+            r_1=0.05, r_2=0.10, b_1=0.02, b_2=0.02, beta1_deg=20.0, beta2_deg=25.0,
+            n_blades=3, w1=10.0, w2=8.0, head_theoretical=15.0, strands=2,
+        )
+        self.assertGreater(boucle.wetted_area, simple.wetted_area)
+        self.assertGreater(boucle.head_friction, simple.head_friction)
+        self.assertLess(boucle.efficiency, simple.efficiency)
+
     def test_le_rapport_porte_la_section(self):
         """Et il doit dire pourquoi ce chiffre n'est pas celui du tableau 2."""
         result = self._losses(synthetic.centrifugal_impeller())

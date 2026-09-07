@@ -333,6 +333,7 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
                 w1=best.w1,
                 w2=w_2,
                 head_theoretical=best.head_theoretical,
+                strands=2 if loops.looped else 1,
             )
             result.warnings.extend(result.channel_losses.warnings)
 

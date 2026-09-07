@@ -313,10 +313,15 @@ tout ce que le modèle 1D ne voit pas — volute, écoulements secondaires,
 rugosité. **C'est l'écart entre deux roues qui a un sens, pas la valeur absolue**,
 et le rapport le dit à l'endroit où il l'affiche.
 
+Une aube **en boucle** présente deux fois ses faces pour un même canal : la
+surface mouillée compte ses deux brins, et le frottement suit. Sans cette
+correction le modèle aurait traité une hélice toroïdale comme une roue à aubes
+simples et sous-estimé son coût — sur l'hélice réelle, de six dixièmes de point.
+
 Deux propriétés le rendent utilisable comme critère de conception : il est
 indépendant du **diamètre** et du **régime**. Vérifié sur les deux échelles d'une
 même hélice réelle (Ø 335 et Ø 184, soit un rapport 0,55) et à deux régimes —
-`L/Dh = 9,92`, `w2/w1 = 1,50` et 75,96 % dans les trois cas.
+`L/Dh = 9,92`, `w2/w1 = 1,50` et le même rendement dans les trois cas.
 
 ### La hauteur est-elle seulement calculable ?
 
@@ -464,7 +469,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-196 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+197 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture
