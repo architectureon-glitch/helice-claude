@@ -227,7 +227,7 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
         lines.append("")
 
     if result.blades is not None and result.blades.notes:
-        lines.append("## Remarques sur le sens de rotation")
+        lines.append("## Remarques sur les aubes et le sens de rotation")
         lines.append("")
         for note in result.blades.notes:
             lines.append(f"- {note}")

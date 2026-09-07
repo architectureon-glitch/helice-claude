@@ -69,6 +69,7 @@ class Topology:
     ratio_r2_r1s: float = 0.0
     machine_type: str = AXIAL
     closed_impeller: bool = False
+    rotation_ambiguity: str = ""  # reserve sur le sens, a taire si l'utilisateur l'a donne
     confidence: ConfidenceMap = field(default_factory=ConfidenceMap)
     warnings: list[str] = field(default_factory=list)
 
@@ -78,6 +79,7 @@ class Topology:
             "pales": self.blades.to_dict(),
             "type_de_roue": self.machine_type,
             "roue_fermee": self.closed_impeller,
+            "reserve_sur_le_sens": self.rotation_ambiguity or None,
             "r_tip_m": self.r_tip,
             "r_tip_pales_m": self.r_blade_tip,
             "z_1_m": self.z_1,
@@ -443,15 +445,17 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
         level = worst(level, MEDIUM)
         if abs(topology.ratio_r2_r1s - config.R_RATIO_MIXED_MAX) < config.VALID_GEOM_TOL:
             # Les deux familles n'appliquent pas la meme regle de sens de rotation :
-            # a cheval sur la frontiere, le sens annonce est un tirage au sort.
-            topology.warnings.append(
+            # a cheval sur la frontiere, la **suggestion** geometrique est un
+            # tirage au sort. La reserve n'est mise en avant que si l'utilisateur
+            # n'a pas donne le sens lui-meme -- sinon elle lui demanderait de
+            # verifier ce qu'il vient d'affirmer.
+            topology.rotation_ambiguity = (
                 f"rapport r2/r1s = {topology.ratio_r2_r1s:.3f} a un millieme de la frontiere "
                 "mixte / centrifuge, or les deux familles donnent des sens de rotation "
-                "**opposes** : le sens annonce n'est pas tranche par la geometrie. Verifiez-le "
-                "sur la vue 3D, ou au doigt sur la piece -- une aube de pompe fuit le sens de "
-                "rotation quand le rayon croit."
+                "**opposes** : la suggestion geometrique n'est pas fiable ici. Donnez le sens "
+                "par --rotation, apres l'avoir lu sur la piece -- une aube de pompe fuit le "
+                "sens de rotation quand le rayon croit."
             )
-            topology.confidence.set("sens_de_rotation", LOW)
         topology.warnings.append(
             f"rapport r2/r1s = {topology.ratio_r2_r1s:.3f} a la frontiere de deux familles : "
             "le type de roue est incertain"

@@ -83,6 +83,21 @@ class TestBoutEnBout(BaseTestCase):
             self.assertClose(point_b.flow, point_a.flow, rel=1e-12)
             self.assertClose(point_b.shaft_power, point_a.shaft_power, rel=1e-12)
 
+    def test_la_reserve_sur_la_frontiere_se_tait_quand_le_sens_est_donne(self):
+        """Inutile de demander de verifier un sens que l'utilisateur vient d'affirmer.
+
+        Sur une roue posee a cheval sur la frontiere mixte / centrifuge, la
+        suggestion geometrique n'est pas fiable et l'outil le dit. Mais une fois
+        le sens fourni, la reserve ne porte plus sur rien.
+        """
+        roue = synthetic.centrifugal_impeller(r1=0.050, r2=0.090)
+        libre = self._run(roue)
+        if not libre.topology.rotation_ambiguity:
+            self.skipTest("cette roue n'est pas a la frontiere des familles")
+        self.assertTrue(any("pas fiable ici" in m for m in libre.warnings))
+        impose = self._run(roue, rotation=1)
+        self.assertFalse(any("pas fiable ici" in m for m in impose.warnings))
+
     def test_le_rapport_distingue_le_retenu_du_suggere(self):
         """Le tableau ne doit pas presenter une suggestion comme une mesure."""
         result = self._run(synthetic.centrifugal_impeller())

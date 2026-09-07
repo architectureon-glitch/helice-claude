@@ -210,12 +210,18 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     camber_warnings = list(geometry.warnings)
 
     # Aube en boucle : la cambrure n'a pas de reponse stable, les normales si.
-    if loops.looped and options.beta1_deg is None and options.beta2_deg is None:
+    if loops.looped:
         normals = normals_module.analyse(aligned, occupancy, topology)
         result.blade_normals = normals
         if normals.beta1_deg > 0.0 and normals.beta2_deg > 0.0:
-            geometry.beta1_deg = normals.beta1_deg
-            geometry.beta2_deg = normals.beta2_deg
+            # Les normales comblent ce que l'utilisateur n'a pas donne, et rien
+            # de plus : imposer beta2 seul ne doit pas faire retomber beta1 sur
+            # la cambrure, qui ne s'applique pas a cette forme -- elle y donnait
+            # 87 degres la ou les normales en lisent 10.
+            if options.beta1_deg is None:
+                geometry.beta1_deg = normals.beta1_deg
+            if options.beta2_deg is None:
+                geometry.beta2_deg = normals.beta2_deg
             # La lecture par les normales alimente la **suggestion**, pas le
             # resultat : le sens retenu reste celui qu'indique l'utilisateur.
             geometry.observed_rotation_sign = blade_module.rotation_sense(
@@ -226,11 +232,11 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
             )
             geometry.notes.extend(normals.notes)
             geometry.warnings.append(
-                f"aubes en boucle : beta1 = {normals.beta1_deg:.1f} deg et beta2 = "
-                f"{normals.beta2_deg:.1f} deg sont lus sur les normales de la surface d'aube, "
-                "la cambrure n'ayant pas de reponse stable sur cette forme. Methode basse de 2 a "
-                "5 degres sur des roues d'angles connus, biais non corrige ; imposez --beta1 et "
-                "--beta2 si vous les connaissez."
+                f"aubes en boucle : beta1 = {geometry.beta1_deg:.1f} deg et beta2 = "
+                f"{geometry.beta2_deg:.1f} deg. Ceux que vous n'avez pas imposes sont lus sur les "
+                "normales de la surface d'aube, la cambrure n'ayant pas de reponse stable sur "
+                "cette forme ; methode basse de 2 a 5 degres sur des roues d'angles connus, biais "
+                "non corrige. Imposez --beta1 et --beta2 si vous les connaissez."
             )
             # Les normales fournissent les angles, plus le sens : celui-ci vient
             # de l'utilisateur, et sa confiance ne se lit pas sur une mesure.
@@ -303,9 +309,18 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     result.confidence.set(
         "sens_de_rotation", HIGH if geometry.forced_rotation else LOW
     )
+    if topology.rotation_ambiguity and not geometry.forced_rotation:
+        result.warnings.insert(0, topology.rotation_ambiguity)
 
     if curves:
         result.head_sensitivity = meanline_module.head_sensitivity(data, curves[0].rpm)
+        if result.head_sensitivity > config.BETA_SENSITIVITY_ALERT:
+            # Le texte dit « ordres de grandeur » : la table de confiance doit
+            # dire la meme chose, sans quoi le lecteur croit l'une des deux.
+            # Debit et NPSHr ne suivent pas : ils ne passent pas par cu2.
+            for quantity in ("hauteur", "puissance", "couple", "rendement"):
+                result.confidence.set(quantity, LOW)
+
         if result.head_sensitivity == float("inf"):
             result.warnings.append(
                 f"hauteur hypersensible a beta2 : un degre d'ecart suffit a faire disparaitre le "

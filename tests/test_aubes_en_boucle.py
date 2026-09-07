@@ -152,9 +152,24 @@ class TestConsequences(BaseTestCase):
     def test_les_angles_imposes_priment_sur_les_normales(self):
         """--beta1/--beta2 doit court-circuiter la lecture par les normales."""
         result = self._run(synthetic.toroidal_propeller(n_blades=3), beta1_deg=18.0, beta2_deg=27.0)
-        self.assertIsNone(result.blade_normals)
         self.assertAlmostEqual(result.blades.beta1_deg, 18.0, places=6)
         self.assertAlmostEqual(result.blades.beta2_deg, 27.0, places=6)
+
+    def test_un_seul_angle_impose_laisse_l_autre_aux_normales(self):
+        """Imposer beta2 ne doit pas faire retomber beta1 sur la cambrure.
+
+        La cambrure ne s'applique pas a une aube en boucle : sur la roue reelle
+        elle donnait 87 degres pour un beta1 que les normales lisent a 10, et le
+        point de fonctionnement disparaissait purement et simplement.
+        """
+        roue = synthetic.toroidal_propeller(n_blades=3)
+        libre = self._run(roue)
+        if libre.blade_normals is None or libre.blade_normals.beta1_deg <= 0.0:
+            self.skipTest("lecture par les normales indisponible sur cette roue")
+
+        partiel = self._run(roue, beta2_deg=27.0)
+        self.assertAlmostEqual(partiel.blades.beta2_deg, 27.0, places=6)
+        self.assertAlmostEqual(partiel.blades.beta1_deg, libre.blades.beta1_deg, places=6)
 
     def test_sans_moyeu_le_rayon_de_sortie_est_celui_des_aubes(self):
         """La moyenne quadratique moyeu-carter n'a pas de sens sans moyeu.
@@ -200,6 +215,19 @@ class TestConsequences(BaseTestCase):
         self.assertLess(sage.head_sensitivity, config.BETA_SENSITIVITY_ALERT)
         self.assertFalse(any("hypersensible" in m for m in sage.warnings))
         del meanline
+
+    def test_la_table_de_confiance_suit_le_texte(self):
+        """Annoncer « ordres de grandeur » et coter « moyenne » serait se contredire."""
+        result = self._run(synthetic.toroidal_propeller(n_blades=3))
+        if result.head_sensitivity <= config.BETA_SENSITIVITY_ALERT:
+            self.skipTest("hauteur peu sensible a beta2 sur cette roue")
+        for quantity in ("hauteur", "puissance", "couple", "rendement"):
+            with self.subTest(grandeur=quantity):
+                self.assertEqual(result.confidence.get_level(quantity), LOW)
+        # Debit et NPSHr ne passent pas par cu2 : ils ne sont pas degrades.
+        for quantity in ("debit", "npshr"):
+            with self.subTest(grandeur=quantity):
+                self.assertNotEqual(result.confidence.get_level(quantity), LOW)
 
     def test_le_rapport_porte_la_mention_non_applicable(self):
         """Le tableau des performances doit etre desamorce dans le rapport."""

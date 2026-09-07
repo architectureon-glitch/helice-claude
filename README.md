@@ -188,6 +188,11 @@ une suggestion**, dans le tableau, dans le résumé console et sur la vue 3D —
 flèche s'affiche en gris tant qu'elle n'est pas confirmée. Un sens indiqué qui
 contredit la suggestion est retenu quand même, avec un avertissement.
 
+Corollaire du même principe : la réserve « la suggestion n'est pas fiable ici »,
+émise quand le rapport `r2/r1s` tombe sur la frontière, ne sort plus dès lors que
+le sens est fourni — elle demanderait de vérifier ce que l'utilisateur vient
+d'affirmer.
+
 Le calcul n'en dépend pas : le modèle de ligne moyenne ne connaît que `|ω|` et
 les angles de pale, et les courbes sont bit à bit identiques dans les deux cas.
 Ce que le sens change, c'est ce que l'outil **affirme** — et c'est vous qui avez
@@ -291,6 +296,15 @@ disparaître le point de fonctionnement, il le dit aussi. Sur l'hélice toroïda
 β2 vaut 4° et l'écart atteint **89 %** — hauteur et puissance n'y sont que des
 ordres de grandeur, alors que le débit et le NPSHr, qui n'en dépendent pas de la
 même façon, restent stables à 1 % près.
+
+Deux conséquences de cette mesure. La table de confiance **suit le texte** :
+au-delà du seuil, `hauteur`, `puissance`, `couple` et `rendement` passent en
+`faible`, tandis que `debit` et `npshr`, qui ne passent pas par `cu2`, gardent
+leur niveau — annoncer « ordres de grandeur » et coter « moyenne » se
+contredisait. Et `--beta1` / `--beta2` se posent **indépendamment** : imposer
+seulement β2 laisse β1 à la lecture par les normales, au lieu de le faire
+retomber sur la cambrure qui, sur une aube en boucle, donnait 87° là où les
+normales en lisent 10 — et faisait disparaître le point de fonctionnement.
 
 ### Le rayon de sortie est celui des pales, pas de la matière
 
@@ -416,7 +430,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-186 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+189 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture
