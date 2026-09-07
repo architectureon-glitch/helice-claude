@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import config
-from .confidence import LOW, ConfidenceMap, worst
+from .confidence import HIGH, LOW, ConfidenceMap, worst
 from .geometry import axis as axis_module
 from .geometry import blade_angles as blade_module
 from .geometry import blade_loops as loops_module
@@ -232,8 +232,9 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
                 "5 degres sur des roues d'angles connus, biais non corrige ; imposez --beta1 et "
                 "--beta2 si vous les connaissez."
             )
-            for quantity in ("angles_de_pale", "sens_de_rotation"):
-                result.confidence.set(quantity, normals.confidence)
+            # Les normales fournissent les angles, plus le sens : celui-ci vient
+            # de l'utilisateur, et sa confiance ne se lit pas sur une mesure.
+            result.confidence.set("angles_de_pale", normals.confidence)
         else:
             result.warnings.append(
                 "aubes en boucle et lecture par les normales infructueuse : les angles de pale "
@@ -298,6 +299,10 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     if not result.discharge:
         result.discharge = blade_module.discharge_direction(topology, geometry)
 
+
+    result.confidence.set(
+        "sens_de_rotation", HIGH if geometry.forced_rotation else LOW
+    )
 
     if curves:
         result.head_sensitivity = meanline_module.head_sensitivity(data, curves[0].rpm)
