@@ -199,6 +199,39 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
     )
     lines.append("")
 
+    losses = result.channel_losses
+    if losses is not None and losses.efficiency > 0.0:
+        lines.append("## Comparaison de conception")
+        lines.append("")
+        lines.append(
+            "Les pertes de la SPEC sont des fractions du point nominal : le rendement du "
+            "tableau 2 ne depend donc pratiquement pas de la forme des aubes, et ne sert pas a "
+            "comparer deux roues. Les grandeurs ci-dessous, elles, sortent de la geometrie du "
+            "canal, et c'est **l'ecart entre deux roues** qui a un sens, non la valeur absolue."
+        )
+        lines.append("")
+        lines.extend(_markdown_table(
+            ["Grandeur", "Valeur"],
+            [
+                ["Longueur developpee du canal (mm)", _mm(losses.length)],
+                ["Diametre hydraulique (mm)", _mm(losses.hydraulic_diameter)],
+                ["Elancement L / Dh", f"{losses.slenderness:.1f}"],
+                ["Surface mouillee (cm2)", f"{losses.wetted_area * 1e4:.0f}"],
+                ["Deceleration relative w2 / w1", f"{losses.de_haller:.2f}"],
+                ["Perte de frottement de canal (m)", f"{losses.head_friction:.2f}"],
+                ["Perte de diffusion (m)", f"{losses.head_diffusion:.2f}"],
+                ["**Rendement de comparaison**", f"**{losses.efficiency * 100.0:.1f} %**"],
+            ],
+        ))
+        lines.append("")
+        lines.append(
+            f"> Une roue centrifuge ordinaire -- six aubes, beta1/beta2 de 22 et 25 degres -- "
+            f"donne **{config.ETA_H * config.ETA_VOL * config.ETA_MEC * 100.0:.1f} %** sur la "
+            "meme echelle, par construction : c'est sur elle que le calage est fait. Le chiffre "
+            "est independant du diametre et du regime, il ne juge que la forme."
+        )
+        lines.append("")
+
     if result.speed_limit is not None:
         limit = result.speed_limit
         lines.append("## Vitesse maximale sans cavitation")

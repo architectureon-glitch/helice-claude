@@ -121,7 +121,8 @@ class PerformanceCurve:
     u1: float = 0.0  # m/s
     u1s: float = 0.0  # m/s
     u2: float = 0.0  # m/s
-    slip: float = 0.0  # coefficient de glissement de Wiesner
+    slip: float = 0.0
+    efficiency_raw: float = 0.0  # rendement au BEP des seules pertes modelisees  # coefficient de glissement de Wiesner
     flow_nominal: float = 0.0  # m3/s, incidence nulle
     friction_coefficient: float = 0.0  # s2/m5
     points: list[OperatingPoint] = field(default_factory=list)
@@ -296,6 +297,7 @@ def build_curve(
     # pertes propres depassent deja celles de la SPEC.
     eta_target = config.ETA_H * config.ETA_VOL * config.ETA_MEC
     eta_raw = curve.points[curve.bep_index].efficiency
+    curve.efficiency_raw = eta_raw
     unmodelled = max(1.0, eta_raw / eta_target) if eta_target > 0.0 else 1.0
     if eta_raw < eta_target:
         curve.warnings.append(

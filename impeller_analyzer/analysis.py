@@ -21,6 +21,7 @@ from .geometry import occupancy as occupancy_module
 from .geometry import sections as sections_module
 from .geometry import topology as topology_module
 from .hydraulics import cavitation as cavitation_module
+from .hydraulics import losses as losses_module
 from .hydraulics import meanline as meanline_module
 from .hydraulics import similarity as similarity_module
 from .io import loader
@@ -87,6 +88,7 @@ class AnalysisResult:
     meanline_input: meanline_module.MeanlineInput | None = None
     curves: list[meanline_module.PerformanceCurve] = field(default_factory=list)
     head_sensitivity: float = 0.0  # ecart relatif de hauteur pour +/- 1 deg sur beta2
+    channel_losses: losses_module.ChannelLosses | None = None
     installation: cavitation_module.Installation | None = None
     speed_limit: cavitation_module.SpeedLimit | None = None
     similarity: similarity_module.SimilarityCheck | None = None
@@ -111,6 +113,7 @@ class AnalysisResult:
             "carte_d_occupation": self.occupancy.summary() if self.occupancy else None,
             "topologie": self.topology.to_dict() if self.topology else None,
             # `None` quand un degre suffit a supprimer le point : JSON ne prend pas l'infini.
+            "pertes_de_canal": self.channel_losses.to_dict() if self.channel_losses else None,
             "sensibilite_hauteur_a_beta2": (
                 self.head_sensitivity if math.isfinite(self.head_sensitivity) else None
             ),
@@ -313,6 +316,26 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
         result.warnings.insert(0, topology.rotation_ambiguity)
 
     if curves:
+        # Pertes calculees sur la geometrie du canal : elles ne remplacent pas
+        # celles de la SPEC, elles servent a comparer deux roues entre elles.
+        best = curves[0].best_efficiency_point()
+        if best is not None and topology.r_1 > 0.0:
+            width_1 = topology.area_1 / (2.0 * math.pi * topology.r_1)
+            w_2 = math.hypot(best.cm2, max(0.0, curves[0].u2 - best.cu2))
+            result.channel_losses = losses_module.analyse(
+                r_1=topology.r_1,
+                r_2=topology.r_2,
+                b_1=width_1,
+                b_2=topology.b_2,
+                beta1_deg=geometry.beta1_deg,
+                beta2_deg=geometry.beta2_deg,
+                n_blades=topology.blades.n_blades,
+                w1=best.w1,
+                w2=w_2,
+                head_theoretical=best.head_theoretical,
+            )
+            result.warnings.extend(result.channel_losses.warnings)
+
         result.head_sensitivity = meanline_module.head_sensitivity(data, curves[0].rpm)
         if result.head_sensitivity > config.BETA_SENSITIVITY_ALERT:
             # Le texte dit « ordres de grandeur » : la table de confiance doit

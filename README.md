@@ -284,6 +284,40 @@ opposées** (`ω = +signe(k)` pour l'axial et le mixte, `−signe(dθ/dr)` pour 
 centrifuge). À cheval sur la frontière, le sens annoncé est un tirage au sort :
 il est désormais signalé comme tel, et sa confiance forcée au plus bas.
 
+### Comparer deux conceptions : ce que le rendement de la SPEC ne sait pas faire
+
+Le rendement du tableau 2 ne juge pas la forme des aubes, et il ne l'a jamais
+prétendu — mais il est affiché à côté de grandeurs calculées, ce qui prête à
+confusion. La raison est structurelle : dans la SPEC, **chaque perte est une
+fraction du point nominal**. Le frottement vaut `K_FROTTEMENT_REL` fois la
+hauteur théorique, l'incidence est nulle au nominal par définition, fuite et
+frottement de disque sont des fractions fixes. Passées à la moulinette, trois
+roues centrifuges radicalement différentes — six aubes à 25°, trois à 65°, huit
+à 15° — rendent 86,25 %, 86,18 % et 86,18 % de pertes brutes : **sept centièmes
+de point d'écart**. Le modèle dimensionne une roue donnée ; il ne compare pas.
+
+`hydraulics/losses.py` calcule les deux pertes qui, elles, dépendent vraiment de
+la géométrie, et qui sont les deux critères classiques du dessin de roue :
+
+- le **frottement de canal**, par Darcy-Weisbach sur la veine inter-aubes —
+  longueur développée `L = (r2 − r1) / sin β` rapportée au diamètre hydraulique
+  `4A/P` du canal. C'est lui qui pénalise un canal long, étroit, ou une aube dont
+  la surface mouillée est doublée ;
+- la **diffusion**, par le rapport `w2/w1`. Passé une certaine décélération
+  relative la couche limite décolle ; le seuil retenu est celui de **de Haller**,
+  `w2/w1 ≥ 0,72`.
+
+Le rendement qui en sort est **calé** par `ETA_COMPARAISON` pour qu'une roue
+centrifuge ordinaire retombe sur `ETA_H × ETA_VOL × ETA_MEC`. Ce facteur porte
+tout ce que le modèle 1D ne voit pas — volute, écoulements secondaires,
+rugosité. **C'est l'écart entre deux roues qui a un sens, pas la valeur absolue**,
+et le rapport le dit à l'endroit où il l'affiche.
+
+Deux propriétés le rendent utilisable comme critère de conception : il est
+indépendant du **diamètre** et du **régime**. Vérifié sur les deux échelles d'une
+même hélice réelle (Ø 335 et Ø 184, soit un rapport 0,55) et à deux régimes —
+`L/Dh = 9,92`, `w2/w1 = 1,50` et 75,96 % dans les trois cas.
+
 ### La hauteur est-elle seulement calculable ?
 
 `cu2 = u2 − cm2 / tan β2`. Aux petits angles la tangente varie très vite, et un
@@ -430,7 +464,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-189 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+196 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture
@@ -464,6 +498,7 @@ impeller_analyzer/
 │   └── blade_angles.py  # cambrure, β1, β2, sens de rotation
 └── hydraulics/
     ├── meanline.py      # Euler + glissement + pertes → H-Q
+    ├── losses.py        # pertes de canal, pour comparer deux conceptions
     ├── cavitation.py    # NPSHr, NPSHa, vitesse maximale
     └── similarity.py    # lois de similitude, vitesse spécifique
 ```
