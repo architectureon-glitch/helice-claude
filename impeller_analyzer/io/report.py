@@ -47,6 +47,17 @@ def _fallback(value):
     return str(value)
 
 
+def _rotation_cell(blades) -> str:
+    """Case du sens de rotation : ce qui est retenu, et ce que la geometrie suggere."""
+    if blades is None:
+        return "-"
+    if blades.forced_rotation:
+        return f"{blades.rotation_label} (impose)"
+    if blades.observed_rotation_sign:
+        return f"**{blades.rotation_label}** -- suggere : {blades.observed_rotation_label}"
+    return blades.rotation_label or "indetermine"
+
+
 def geometry_table(result: AnalysisResult) -> list[tuple[str, str, str]]:
     """Tableau 1 de la SPEC : geometrie extraite."""
     topology = result.topology
@@ -78,7 +89,7 @@ def geometry_table(result: AnalysisResult) -> list[tuple[str, str, str]]:
         ),
         (
             "Sens de rotation",
-            blades.rotation_label or "indetermine",
+            _rotation_cell(blades),
             _confidence(confidence.get_level("sens_de_rotation")),
         ),
         ("Sens de sortie du liquide", outlet, _confidence(confidence.get_level("sens_de_rotation"))),

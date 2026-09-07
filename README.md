@@ -61,6 +61,7 @@ utiles au quotidien :
 | `--unit` | unité du fichier (défaut `cm`), ou un facteur vers le mètre |
 | `--r-aspiration` | rayon d'aspiration imposé, en cm ; **prime toujours** sur la détection |
 | `--aspiration` | `auto` (défaut), `+z` ou `-z` : quel bout du maillage est le côté aspiration ; force la détection décrite plus bas |
+| `--rotation` | `horaire` ou `antihoraire`, vu de +Z. **Sans lui le sens reste non renseigné** : la géométrie le suggère, elle ne le tranche pas |
 | `--blades`, `--beta1`, `--beta2` | repli manuel quand l'extraction est peu sûre |
 | `--altitude`, `--temperature`, `--hauteur-aspiration`, `--pertes-aspiration` | hypothèses d'installation, qui fixent le NPSH disponible |
 | `--grille NR NZ`, `--secteurs N` | finesse de la carte d'occupation |
@@ -169,6 +170,28 @@ concernées. Le résumé console et le tableau des performances portent une ment
 couple, rendement et NPSHr passent en confiance basse. Axe, nombre d'aubes,
 rayons, sections et volumes restent valables : ils ne passent pas par la
 cambrure.
+
+### Le sens de rotation est une entrée, pas un résultat
+
+L'outil le mesurait et l'annonçait. Deux cas montrent qu'il n'en a pas le droit.
+Quand le rapport `r2/r1s` tombe à cheval sur la frontière mixte / centrifuge, les
+deux familles appliquent des règles **opposées** (`ω = +signe(k)` d'un côté,
+`−signe(dθ/dr)` de l'autre) : le sens annoncé bascule pour un millième d'écart.
+Et sur une aube quasi radiale, la lecture n'a plus aucune marge. Dans les deux
+cas l'outil affichait un sens avec l'aplomb d'un résultat mesuré.
+
+Il le demande désormais. `--rotation horaire|antihoraire` (ou le menu du même nom
+dans l'application locale) le renseigne ; sans lui, la case du tableau porte
+`à indiquer (--rotation)` et la confiance reste au plus bas. La lecture
+géométrique n'est pas perdue pour autant : elle est conservée et **présentée comme
+une suggestion**, dans le tableau, dans le résumé console et sur la vue 3D — où la
+flèche s'affiche en gris tant qu'elle n'est pas confirmée. Un sens indiqué qui
+contredit la suggestion est retenu quand même, avec un avertissement.
+
+Le calcul n'en dépend pas : le modèle de ligne moyenne ne connaît que `|ω|` et
+les angles de pale, et les courbes sont bit à bit identiques dans les deux cas.
+Ce que le sens change, c'est ce que l'outil **affirme** — et c'est vous qui avez
+la pièce sous les yeux.
 
 ### Calculer une roue dont les aubes sont des boucles
 
@@ -393,7 +416,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-177 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+186 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture

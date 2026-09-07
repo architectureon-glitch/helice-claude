@@ -37,6 +37,7 @@ class Options:
     blades: int | None = None
     beta1_deg: float | None = None
     beta2_deg: float | None = None
+    rotation: int | None = None  # +1 anti-horaire, -1 horaire, None : a indiquer
     altitude: float = config.ALTITUDE
     temperature_c: float = config.TEMPERATURE
     suction_height: float = config.HAUTEUR_ASPIRATION
@@ -58,6 +59,7 @@ class Options:
             "pales_imposees": self.blades,
             "beta1_impose_deg": self.beta1_deg,
             "beta2_impose_deg": self.beta2_deg,
+            "sens_de_rotation_impose": self.rotation,
             "cote_aspiration": self.suction,
             "altitude_m": self.altitude,
             "temperature_C": self.temperature_c,
@@ -197,7 +199,11 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     # Phase 4 : coupes, angles de pale, sens de rotation.
     sections = sections_module.extract_sections(aligned, occupancy, topology)
     geometry = blade_module.analyse(
-        sections, topology, forced_beta1_deg=options.beta1_deg, forced_beta2_deg=options.beta2_deg
+        sections,
+        topology,
+        forced_beta1_deg=options.beta1_deg,
+        forced_beta2_deg=options.beta2_deg,
+        forced_rotation=options.rotation,
     )
     result.blades = geometry
     result.confidence.update(geometry.confidence)
@@ -210,10 +216,14 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
         if normals.beta1_deg > 0.0 and normals.beta2_deg > 0.0:
             geometry.beta1_deg = normals.beta1_deg
             geometry.beta2_deg = normals.beta2_deg
-            geometry.rotation_sign = blade_module.rotation_sense(
+            # La lecture par les normales alimente la **suggestion**, pas le
+            # resultat : le sens retenu reste celui qu'indique l'utilisateur.
+            geometry.observed_rotation_sign = blade_module.rotation_sense(
                 topology.machine_type, normals.slope_sign
             )
-            geometry.rotation_label = blade_module.rotation_label(geometry.rotation_sign)
+            geometry.observed_rotation_label = blade_module.rotation_label(
+                geometry.observed_rotation_sign
+            )
             geometry.notes.extend(normals.notes)
             geometry.warnings.append(
                 f"aubes en boucle : beta1 = {normals.beta1_deg:.1f} deg et beta2 = "

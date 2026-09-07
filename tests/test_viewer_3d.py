@@ -74,6 +74,9 @@ class TestPayload(ViewerTestCase):
         """Le signe de rotation pilote l'animation de la page."""
         payload = viewer.build_payload(self.result)
         self.assertEqual(payload["resume"]["rotation_signe"], self.result.blades.rotation_sign)
+        self.assertEqual(
+            payload["resume"]["rotation_suggeree"], self.result.blades.observed_rotation_sign
+        )
         self.assertIn(payload["resume"]["confiance"], ("haute", "moyenne", "faible"))
 
     def test_tableaux_et_carte(self):

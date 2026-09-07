@@ -181,18 +181,21 @@ class TestRotationSense(BaseTestCase):
         _, _, _, _, reverse = analysed(
             ("axial-sens", -1), lambda: synthetic.axial_impeller(n_blades=4, sense=-1)
         )
-        self.assertEqual(direct.rotation_sign, 1)
-        self.assertIn(ba.COUNTERCLOCKWISE, direct.rotation_label)
-        self.assertEqual(reverse.rotation_sign, -1)
-        self.assertIn(ba.CLOCKWISE, reverse.rotation_label)
-        self.assertEqual(direct.confidence["sens_de_rotation"], HIGH)
+        # Le sens **retenu** vient de l'utilisateur ; sans lui il reste vide.
+        self.assertEqual(direct.rotation_sign, 0)
+        self.assertEqual(direct.rotation_label, ba.NOT_SUPPLIED)
+        # La lecture geometrique, elle, doit rester juste et s'inverser.
+        self.assertEqual(direct.observed_rotation_sign, 1)
+        self.assertIn(ba.COUNTERCLOCKWISE, direct.observed_rotation_label)
+        self.assertEqual(reverse.observed_rotation_sign, -1)
+        self.assertIn(ba.CLOCKWISE, reverse.observed_rotation_label)
 
     def test_sens_centrifuge_est_oppose_a_la_courbure(self):
         """Aube incurvee vers l'arriere : signe(omega) = -signe(dtheta/dr)."""
         _, _, _, _, direct = analysed(("centri-sens", 1), lambda: synthetic.centrifugal_impeller(sense=1))
         _, _, _, _, reverse = analysed(("centri-sens", -1), lambda: synthetic.centrifugal_impeller(sense=-1))
-        self.assertEqual(direct.rotation_sign, -1)
-        self.assertEqual(reverse.rotation_sign, 1)
+        self.assertEqual(direct.observed_rotation_sign, -1)
+        self.assertEqual(reverse.observed_rotation_sign, 1)
         self.assertTrue(any("incurvees vers l'avant" in note for note in direct.notes))
 
     def test_regle_de_sens_isolee(self):

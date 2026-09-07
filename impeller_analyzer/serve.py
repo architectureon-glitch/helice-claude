@@ -30,6 +30,7 @@ import webbrowser
 
 from . import config
 from .analysis import Options, run
+from .geometry import blade_angles
 from .io import loader, report, viewer
 
 #: Extensions acceptees par le formulaire, toutes familles confondues.
@@ -134,6 +135,17 @@ def parse_speeds(raw: str) -> tuple[float, ...]:
     return tuple(speeds)
 
 
+def _rotation(query: dict) -> int | None:
+    """Sens de rotation demande par le formulaire, `None` s'il n'est pas renseigne."""
+    value = (query.get("rotation", [""])[0] or "").strip()
+    if not value:
+        return None
+    try:
+        return blade_angles.rotation_sign_from_name(value)
+    except ValueError as error:
+        raise BadRequest(str(error)) from error
+
+
 def options_from_query(query: dict) -> Options:
     """Construit les options d'analyse depuis les champs du formulaire."""
     grid = _int(query, "grille", config.GRID_NR) or config.GRID_NR
@@ -145,6 +157,7 @@ def options_from_query(query: dict) -> Options:
         blades=_int(query, "pales"),
         beta1_deg=_float(query, "beta1"),
         beta2_deg=_float(query, "beta2"),
+        rotation=_rotation(query),
         altitude=_float(query, "altitude", config.ALTITUDE),
         temperature_c=_float(query, "temperature", config.TEMPERATURE),
         suction_height=_float(query, "hauteur", config.HAUTEUR_ASPIRATION),

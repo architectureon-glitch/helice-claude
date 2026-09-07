@@ -158,14 +158,23 @@ def build_overlays(result) -> list[dict]:
             "points": _circle(topology.r_2, topology.z_2),
         }
     )
-    if blades is not None and blades.rotation_sign:
+    # La fleche montre le sens retenu, ou a defaut celui que suggere la geometrie
+    # -- c'est justement ce qu'on demande a l'utilisateur de confirmer sur la piece.
+    rotation_sign = 0 if blades is None else (
+        blades.rotation_sign or blades.observed_rotation_sign
+    )
+    if rotation_sign:
         groups.append(
             {
                 "id": "rotation",
-                "label": blades.rotation_label,
-                "color": "#F0A202",
+                "label": (
+                    blades.rotation_label
+                    if blades.rotation_sign
+                    else f"{blades.observed_rotation_label} -- suggere, a confirmer"
+                ),
+                "color": "#F0A202" if blades.rotation_sign else "#9AA3AE",
                 "points": _arc_arrow(
-                    topology.r_tip * 1.18, z_high + 0.12 * height, blades.rotation_sign
+                    topology.r_tip * 1.18, z_high + 0.12 * height, rotation_sign
                 ),
             }
         )
@@ -235,6 +244,8 @@ def build_payload(result, mesh: TriMesh | None = None) -> dict:
             "pales": topology.blades.n_blades if topology else 0,
             "rotation": blades.rotation_label if blades else "-",
             "rotation_signe": blades.rotation_sign if blades else 0,
+            # Le sens suggere ne sert qu'a faire tourner la vue, jamais a conclure.
+            "rotation_suggeree": (blades.observed_rotation_sign if blades else 0),
             "beta1": blades.beta1_deg if blades else 0.0,
             "beta2": blades.beta2_deg if blades else 0.0,
             "confiance": _CONFIDENCE_FR.get(result.overall_confidence(), result.overall_confidence()),
@@ -586,6 +597,14 @@ th{font-weight:500; color:var(--ink-soft); font-size:.78rem}
                 <input id="beta2" placeholder="detecte" inputmode="decimal">
               </div>
               <div class="champ">
+                <label for="rotation">Sens de rotation</label>
+                <select id="rotation">
+                  <option value="">a indiquer</option>
+                  <option value="horaire">horaire (vu de +Z)</option>
+                  <option value="antihoraire">anti-horaire (vu de +Z)</option>
+                </select>
+              </div>
+              <div class="champ">
                 <label for="temperature">Temperature (&deg;C)</label>
                 <input id="temperature" value="20" inputmode="decimal">
               </div>
@@ -853,7 +872,7 @@ function draw(now){
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   if (!scene || !view) return;
-  if (spinning) spin += dt * 1.1 * (D.resume.rotation_signe || 1);
+  if (spinning) spin += dt * 1.1 * (D.resume.rotation_signe || D.resume.rotation_suggeree || 1);
 
   const eye = eyePosition();
   const proj = M4.perspective(Math.PI / 4.2, canvas.width / canvas.height, radius * 0.02, radius * 60);
@@ -1062,8 +1081,11 @@ function render(payload){
   buildRail(payload);
   for (const b of outils.querySelectorAll("button")) b.setAttribute("aria-pressed", "false");
   spinButton.textContent = "Faire tourner";
-  spinButton.disabled = !payload.resume.rotation_signe;
-  spinButton.title = payload.resume.rotation_signe ? "" : "sens de rotation indetermine";
+  var sens = payload.resume.rotation_signe || payload.resume.rotation_suggeree;
+  spinButton.disabled = !sens;
+  spinButton.title = payload.resume.rotation_signe
+    ? ""
+    : (sens ? "sens seulement suggere par la geometrie : a confirmer" : "sens de rotation non renseigne");
   accueil.hidden = true;
 }
 
@@ -1124,6 +1146,8 @@ if (SERVEUR) {
     params.set("nom", choisi.name);
     params.set("unite", document.getElementById("unite").value);
     params.set("rpm", document.getElementById("rpm").value.trim());
+    const sens = document.getElementById("rotation").value;
+    if (sens) params.set("rotation", sens);
     for (const [id, cle] of [["r-asp","r_aspiration"], ["pales","pales"], ["beta1","beta1"],
                              ["beta2","beta2"], ["temperature","temperature"], ["altitude","altitude"],
                              ["hauteur","hauteur"], ["pertes","pertes"], ["grille","grille"]]) {

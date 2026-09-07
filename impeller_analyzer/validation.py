@@ -159,7 +159,14 @@ def check_synthetic(title: str, mesh: TriMesh, expected: dict, nr: int = config.
         )
     if "rotation_sign" in expected:
         report.checks.append(
-            Check("sens de rotation", float(geometry.rotation_sign), float(expected["rotation_sign"]), 0.0)
+            # La campagne controle la **lecture geometrique** : le sens retenu,
+            # lui, vient de l'utilisateur et n'a rien a valider.
+            Check(
+                "sens de rotation suggere",
+                float(geometry.observed_rotation_sign),
+                float(expected["rotation_sign"]),
+                0.0,
+            )
         )
     report.notes.append(
         "l'ecart sur beta est exprime en degres : une tolerance relative de 2 % n'a pas de "
@@ -242,8 +249,8 @@ def check_invariance(
     report.checks.append(
         Check(
             "sens de rotation",
-            float(moved_geometry.rotation_sign),
-            float(reference_geometry.rotation_sign),
+            float(moved_geometry.observed_rotation_sign),
+            float(reference_geometry.observed_rotation_sign),
             0.0,
         )
     )

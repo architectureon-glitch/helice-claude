@@ -12,6 +12,7 @@ import sys
 
 from . import __version__, config
 from .analysis import Options, run
+from .geometry import blade_angles
 from .io import loader, report
 
 EPILOG = """\
@@ -68,6 +69,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--beta1", type=float, default=None, metavar="DEG", help="angle de pale d'entree impose")
     parser.add_argument("--beta2", type=float, default=None, metavar="DEG", help="angle de pale de sortie impose")
     parser.add_argument(
+        "--rotation", choices=["horaire", "antihoraire"], default=None,
+        help=(
+            "sens de rotation vu de +Z (cote aspiration). Sans lui, le sens reste "
+            "non renseigne : la geometrie le suggere mais ne le tranche pas"
+        ),
+    )
+    parser.add_argument(
         "--aspiration", choices=["auto", "+z", "-z"], default="auto",
         help=(
             "cote par lequel la roue aspire (defaut : auto, deduit de la geometrie ; "
@@ -121,6 +129,7 @@ def options_from_args(args: argparse.Namespace) -> Options:
         beta1_deg=args.beta1,
         beta2_deg=args.beta2,
         suction=args.aspiration,
+        rotation=blade_angles.rotation_sign_from_name(args.rotation),
         altitude=args.altitude,
         temperature_c=args.temperature,
         suction_height=args.hauteur_aspiration,
@@ -146,7 +155,15 @@ def summarise(result, produced: dict[str, str]) -> str:
             f"r1s = {topology.r_1s * config.MM_PER_M:.1f} mm, r2 = {topology.r_2 * config.MM_PER_M:.1f} mm, "
             f"beta1/beta2 = {blades.beta1_deg:.1f}/{blades.beta2_deg:.1f} deg"
         )
-        lines.append(f"Sens de rotation : {blades.rotation_label}")
+        if blades.forced_rotation:
+            lines.append(f"Sens de rotation : {blades.rotation_label} (impose)")
+        elif blades.observed_rotation_sign:
+            lines.append(
+                f"Sens de rotation : {blades.rotation_label} -- la geometrie suggere "
+                f"{blades.observed_rotation_label}"
+            )
+        else:
+            lines.append(f"Sens de rotation : {blades.rotation_label}")
     if looped:
         # Le premier chiffre lu est celui qu'on croit : autant dire tout de suite
         # que la suite du resume ne decrit pas cette roue.

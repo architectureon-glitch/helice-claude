@@ -14,6 +14,7 @@ from .topology import AXIAL, CENTRIFUGAL, MIXED, Topology
 Point2 = tuple[float, float]
 
 COUNTERCLOCKWISE = "anti-horaire"
+NOT_SUPPLIED = "a indiquer (--rotation)"
 CLOCKWISE = "horaire"
 
 
@@ -85,8 +86,11 @@ class BladeGeometry:
     pitch: float = 0.0
     n_families: int = 1  # familles de profils par coupe : 1 pour une aube simple
     n_effective_blades: int = 0  # surfaces de pale vues par l'ecoulement sur un tour
-    rotation_sign: int = 0  # +1 anti-horaire vu de +Z, -1 horaire
+    rotation_sign: int = 0  # +1 anti-horaire vu de +Z, -1 horaire, 0 non renseigne
     rotation_label: str = ""
+    observed_rotation_sign: int = 0  # ce que la geometrie suggere, a titre indicatif
+    observed_rotation_label: str = ""
+    forced_rotation: bool = False
     helix_coefficient: float = 0.0  # k = dz/dtheta au rayon de reference, en m/rad
     forced_beta: bool = False
     confidence: ConfidenceMap = field(default_factory=ConfidenceMap)
@@ -106,6 +110,9 @@ class BladeGeometry:
             "aubes_effectives": self.n_effective_blades,
             "sens_de_rotation": self.rotation_label,
             "signe_de_rotation": self.rotation_sign,
+            "sens_de_rotation_impose": self.forced_rotation,
+            "sens_suggere_par_la_geometrie": self.observed_rotation_label or None,
+            "signe_suggere_par_la_geometrie": self.observed_rotation_sign,
             "coefficient_helicoidal_k_m_par_rad": self.helix_coefficient,
             "angles_imposes": self.forced_beta,
             "coupes": [section.to_dict() for section in self.sections],
@@ -665,7 +672,19 @@ def rotation_label(sign: int) -> str:
         return f"{COUNTERCLOCKWISE} (vu de +Z, cote aspiration)"
     if sign < 0:
         return f"{CLOCKWISE} (vu de +Z, cote aspiration)"
-    return "indetermine"
+    return NOT_SUPPLIED
+
+
+def rotation_sign_from_name(name: str | None) -> int | None:
+    """Traduit `horaire` / `antihoraire` en signe, `None` si rien n'est demande."""
+    if name is None:
+        return None
+    key = name.strip().lower().replace("-", "").replace("_", "")
+    if key in ("horaire", "cw", "sensHoraire".lower()):
+        return -1
+    if key in ("antihoraire", "ccw", "trigonometrique", "trigo"):
+        return 1
+    raise ValueError(f"sens de rotation inconnu : {name!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -676,6 +695,7 @@ def analyse(
     topology: Topology,
     forced_beta1_deg: float | None = None,
     forced_beta2_deg: float | None = None,
+    forced_rotation: int | None = None,
 ) -> BladeGeometry:
     """Extraction des angles de pale et du sens de rotation (SPEC 4.2 a 4.4)."""
     geometry = BladeGeometry()
@@ -746,8 +766,8 @@ def analyse(
         )
 
         slope_sign = 1 if sum(s.slope_sign for s in per_section) >= 0 else -1
-        geometry.rotation_sign = rotation_sense(topology.machine_type, slope_sign)
-        geometry.rotation_label = rotation_label(geometry.rotation_sign)
+        geometry.observed_rotation_sign = rotation_sense(topology.machine_type, slope_sign)
+        geometry.observed_rotation_label = rotation_label(geometry.observed_rotation_sign)
         geometry.helix_coefficient = slope_sign * geometry.reference_radius * math.tan(
             math.radians(_clamp_beta(geometry.beta2_deg))
         )
@@ -757,6 +777,38 @@ def analyse(
             "sens_de_rotation", _rotation_confidence(topology, geometry, per_section)
         )
         _add_rotation_notes(topology, geometry)
+
+    # Le sens de rotation est une **entree**, pas un resultat. La geometrie le
+    # suggere, mais elle ne le tranche pas : sur une roue a rapport r2/r1s pose a
+    # cheval sur la frontiere mixte / centrifuge, les deux familles donnent des
+    # sens opposes, et sur une aube quasi radiale la lecture n'a aucune marge.
+    # L'utilisateur, lui, a la piece sous les yeux.
+    if forced_rotation:
+        geometry.rotation_sign = 1 if forced_rotation > 0 else -1
+        geometry.forced_rotation = True
+        geometry.confidence.set("sens_de_rotation", HIGH)
+        geometry.notes.append(
+            f"sens de rotation impose par l'utilisateur : {rotation_label(geometry.rotation_sign)}"
+        )
+        if (
+            geometry.observed_rotation_sign
+            and geometry.observed_rotation_sign != geometry.rotation_sign
+        ):
+            geometry.warnings.append(
+                "le sens impose est l'inverse de ce que suggere la geometrie "
+                f"({geometry.observed_rotation_label}). C'est le sens impose qui est retenu ; "
+                "verifiez qu'il correspond bien a la piece, la suggestion pouvant se tromper "
+                "sur une aube quasi radiale ou une roue a la frontiere de deux familles."
+            )
+    else:
+        geometry.rotation_sign = 0
+        geometry.confidence.set("sens_de_rotation", LOW)
+        if geometry.observed_rotation_sign:
+            geometry.notes.append(
+                f"la geometrie suggere {geometry.observed_rotation_label}, a titre indicatif "
+                "seulement : le sens retenu doit etre donne par --rotation"
+            )
+    geometry.rotation_label = rotation_label(geometry.rotation_sign)
 
     if forced_beta1_deg is not None or forced_beta2_deg is not None:
         if forced_beta1_deg is not None:
@@ -837,9 +889,9 @@ def _add_rotation_notes(topology: Topology, geometry: BladeGeometry) -> None:
     """Remarques a reporter avec le sens de rotation."""
     if topology.machine_type == CENTRIFUGAL:
         geometry.notes.append(
-            "la regle appliquee suppose des aubes incurvees vers l'arriere, cas de la quasi-totalite "
-            "des pompes. Pour des aubes incurvees vers l'avant (rare en pompe, courant sur un "
-            "ventilateur a cage d'ecureuil), le sens de rotation est l'inverse de celui indique."
+            "la suggestion geometrique suppose des aubes incurvees vers l'arriere, cas de la "
+            "quasi-totalite des pompes. Pour des aubes incurvees vers l'avant (rare en pompe, "
+            "courant sur un ventilateur a cage d'ecureuil), elle est a inverser."
         )
     else:
         geometry.notes.append(
