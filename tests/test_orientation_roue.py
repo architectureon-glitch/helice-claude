@@ -136,6 +136,29 @@ class TestShroudedGeometry(BaseTestCase):
         self.assertClose(result.r_1s, 0.035, rel=config.VALID_GEOM_TOL)
         self.assertEqual(result.warnings, [])
 
+    def test_le_plateau_arriere_n_est_pas_un_moyeu_de_sortie(self):
+        """Sur une roue fermee classee mixte, b2 ne doit pas se refermer sur rien.
+
+        Au plan de fuite, la recherche de moyeu attrape le plateau arriere, qui
+        occupe tout le rayon : `r_2h` vaut alors presque `r_2s` et la formule
+        annulaire `b_2 = r_2s - r_2h` s'effondre -- 1.2 mm, soit le pas de la
+        grille, pour une sortie qui en fait 25. La section de refoulement se lit
+        la ou elle est ouverte : en hauteur, au bout des aubes.
+        """
+        roue = synthetic.centrifugal_impeller(
+            n_blades=5, beta1_deg=10.0, beta2_deg=20.0,
+            r1=0.0927, r2=0.1670, b1=0.030, b2=0.025, eye_height=0.050,
+            thickness=0.012, front_shroud=True, shroud_thickness=0.005,
+            n_radial=36, n_span=8, hub_segments=200,
+        )
+        _, occupancy = occupancy_of(roue, grid=140)
+        result = topo.characteristic_radii(occupancy)
+
+        self.assertEqual(result.machine_type, topo.MIXED)  # la branche visee
+        self.assertGreater(result.r_2h, 0.9 * result.r_2s)  # le plateau pris pour un moyeu
+        self.assertClose(result.b_2, 0.025, rel=0.15)
+        self.assertGreater(result.area_2, 0.015)  # et non les 11 cm2 du cas degenere
+
     def test_disque_arriere_debordant(self):
         """Un disque arriere plus large que les aubes ne doit pas fixer r_2."""
         roue = synthetic.combine([

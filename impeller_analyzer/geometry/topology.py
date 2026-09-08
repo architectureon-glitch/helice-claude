@@ -220,6 +220,17 @@ def _blade_outer_index(blade_row: list[bool], row: list[float]) -> int:
     return _outer_index(row)
 
 
+def _tip_height(
+    occupancy: OccupancyMap, blade: list[list[bool]], r_tip: float
+) -> float:
+    """Hauteur de pale au rayon exterieur, c'est-a-dire la section de refoulement radial."""
+    column = occupancy.radial_index(config.B2_RADIUS_FRACTION * r_tip)
+    rows = [iz for iz in range(occupancy.nz) if blade[iz][column]]
+    if not rows:
+        return 0.0
+    return occupancy.z_centres[rows[-1]] - occupancy.z_centres[rows[0]] + occupancy.dz
+
+
 def _shroud_eye(occupancy: OccupancyMap, iz_1: int) -> tuple[int, int]:
     """Index radial de l'oeillard, sur une roue fermee (SPEC 3.2, cas ferme).
 
@@ -406,13 +417,17 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
         heights = [occupancy.z_centres[iz] for iz in range(nz) if blade[iz][column]]
         topology.b_2 = (max(heights) - min(heights) + occupancy.dz) if heights else occupancy.dz
         topology.area_2 = 2.0 * math.pi * topology.r_2 * topology.b_2 * config.TAU_2
-    elif topology.r_2h > 0.0:
+    elif topology.r_2h > 0.0 and (topology.r_2s - topology.r_2h) >= _tip_height(
+        occupancy, blade, topology.r_blade_tip or topology.r_2s
+    ):
         topology.r_2 = math.sqrt((topology.r_2s ** 2 + topology.r_2h ** 2) / 2.0)
         topology.b_2 = topology.r_2s - topology.r_2h
         topology.area_2 = math.pi * (topology.r_2s ** 2 - topology.r_2h ** 2) * config.TAU_2
     else:
-        # Le rayon quadratique moyen suppose une veine annulaire bordee par un
-        # moyeu. Sans moyeu au plan de sortie il degenere en r_2s / racine(2),
+        # Le refoulement se fait par la ou la section est ouverte : ici en
+        # hauteur, a la peripherie. Deux cas amenent ici. Sans moyeu au plan de
+        # sortie, le rayon quadratique moyen suppose une veine annulaire bordee
+        # par un moyeu. Sans moyeu au plan de sortie il degenere en r_2s / racine(2),
         # qui n'est pas un rayon de refoulement mais un artefact de formule : sur
         # la roue toroidale de reference il donnait 118 mm pour des aubes qui
         # vont a 167, et faisait basculer u2 d'un tiers selon que la roue etait
@@ -424,8 +439,10 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
         topology.b_2 = (max(heights) - min(heights) + occupancy.dz) if heights else occupancy.dz
         topology.area_2 = 2.0 * math.pi * topology.r_2 * topology.b_2 * config.TAU_2
         topology.warnings.append(
-            "pas de moyeu au plan de sortie : le rayon de refoulement est pris au bout des "
-            "aubes, la moyenne quadratique moyeu-carter n'ayant pas de sens sans moyeu"
+            "refoulement lu comme radial : la section ouverte au bout des aubes est plus "
+            "haute que large. Le rayon de refoulement est pris au bout des aubes, la moyenne "
+            "quadratique moyeu-carter ne decrivant pas cette sortie -- soit qu'il n'y ait pas "
+            "de moyeu au plan de sortie, soit que le plateau arriere y soit pris pour un moyeu."
         )
 
     level = HIGH
