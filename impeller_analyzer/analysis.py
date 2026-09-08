@@ -21,6 +21,7 @@ from .geometry import occupancy as occupancy_module
 from .geometry import sections as sections_module
 from .geometry import topology as topology_module
 from .hydraulics import cavitation as cavitation_module
+from .hydraulics import energy as energy_module
 from .hydraulics import losses as losses_module
 from .hydraulics import meanline as meanline_module
 from .hydraulics import similarity as similarity_module
@@ -89,6 +90,7 @@ class AnalysisResult:
     curves: list[meanline_module.PerformanceCurve] = field(default_factory=list)
     head_sensitivity: float = 0.0  # ecart relatif de hauteur pour +/- 1 deg sur beta2
     channel_losses: losses_module.ChannelLosses | None = None
+    energy_budget: energy_module.EnergyBudget | None = None
     installation: cavitation_module.Installation | None = None
     speed_limit: cavitation_module.SpeedLimit | None = None
     similarity: similarity_module.SimilarityCheck | None = None
@@ -114,6 +116,7 @@ class AnalysisResult:
             "topologie": self.topology.to_dict() if self.topology else None,
             # `None` quand un degre suffit a supprimer le point : JSON ne prend pas l'infini.
             "pertes_de_canal": self.channel_losses.to_dict() if self.channel_losses else None,
+            "bilan_d_energie": self.energy_budget.to_dict() if self.energy_budget else None,
             "sensibilite_hauteur_a_beta2": (
                 self.head_sensitivity if math.isfinite(self.head_sensitivity) else None
             ),
@@ -319,6 +322,12 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
         # Pertes calculees sur la geometrie du canal : elles ne remplacent pas
         # celles de la SPEC, elles servent a comparer deux roues entre elles.
         best = curves[0].best_efficiency_point()
+        if best is not None:
+            # D'ou vient la hauteur : centrifuge, diffusion, energie cinetique.
+            result.energy_budget = energy_module.budget(
+                u1=curves[0].u1, u2=curves[0].u2,
+                cm1=best.cm1, cm2=best.cm2, cu2=best.cu2,
+            )
         if best is not None and topology.r_1 > 0.0:
             width_1 = topology.area_1 / (2.0 * math.pi * topology.r_1)
             w_2 = math.hypot(best.cm2, max(0.0, curves[0].u2 - best.cu2))

@@ -199,6 +199,42 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
     )
     lines.append("")
 
+    budget = result.energy_budget
+    if budget is not None and budget.total != 0.0:
+        centri, diffus, cinet = budget.shares()
+        lines.append("## D'ou vient la hauteur")
+        lines.append("")
+        lines.append(
+            "La hauteur theorique vaut `H = u2 cu2 / g`. Ce n'est pas un modele mais un "
+            "theoreme : il sort de la conservation du moment cinetique et vaut pour n'importe "
+            "quelle forme d'aube. La meme quantite se repartit en trois termes, qui disent par "
+            "quel mecanisme l'energie passe au fluide -- elle ne cree rien, elle repartit."
+        )
+        lines.append("")
+        lines.extend(_markdown_table(
+            ["Terme", "Hauteur (m)", "Part", "Ce qu'il represente"],
+            [
+                ["centrifuge `(u2^2-u1^2)/2g`", f"{budget.centrifugal:+.2f}", f"{centri:+.0%}",
+                 "ne depend que des rayons et du regime, **pas de la forme des aubes**"],
+                ["diffusion `(w1^2-w2^2)/2g`", f"{budget.diffusion:+.2f}", f"{diffus:+.0%}",
+                 "vitesse relative convertie en pression ; negative, elle **detruit** de la hauteur"],
+                ["cinetique `(c2^2-c1^2)/2g`", f"{budget.kinetic:+.2f}", f"{cinet:+.0%}",
+                 "sort en vitesse absolue, a recuperer dans la volute"],
+                ["**somme**", f"**{budget.total:.2f}**", "100 %",
+                 f"controle : `u2 cu2 / g` = {budget.euler:.2f} m, ecart {budget.residual:.1e}"],
+            ],
+        ))
+        lines.append("")
+        if budget.diffusion < 0.0:
+            lines.append(
+                f"> **Le canal accelere l'ecoulement relatif** au lieu de le ralentir : "
+                f"w2 = {budget.w2:.1f} m/s contre w1 = {budget.w1:.1f}. Un canal de pompe bien "
+                f"dessine fait l'inverse, et convertit cette vitesse en pression statique. Ici le "
+                f"terme de diffusion retire {abs(budget.diffusion):.1f} m des "
+                f"{budget.centrifugal:.1f} m que l'effet centrifuge apporte."
+            )
+            lines.append("")
+
     losses = result.channel_losses
     if losses is not None and losses.efficiency > 0.0:
         lines.append("## Comparaison de conception")

@@ -284,6 +284,32 @@ opposées** (`ω = +signe(k)` pour l'axial et le mixte, `−signe(dθ/dr)` pour 
 centrifuge). À cheval sur la frontière, le sens annoncé est un tirage au sort :
 il est désormais signalé comme tel, et sa confiance forcée au plus bas.
 
+### D'où vient la hauteur
+
+`H = u2·cu2 / g` n'est pas un modèle mais un **théorème** : il sort de la
+conservation du moment cinétique et vaut pour n'importe quelle forme d'aube. Le
+couple sur l'arbre est `ρQ(r2·cu2 − r1·cu1)` ; aucune géométrie ne peut ajouter
+d'énergie autrement qu'en changeant `cu2`. `hydraulics/energy.py` en donne la
+décomposition classique en trois termes :
+
+```
+H = (u2² − u1²)/2g  +  (w1² − w2²)/2g  +  (c2² − c1²)/2g
+    \___ centrifuge __/   \___ diffusion __/   \___ cinétique __/
+```
+
+Le terme **centrifuge** ne dépend que des rayons et du régime — deux roues de
+même diamètre à la même vitesse en tirent exactement la même chose, quelle que
+soit la forme des aubes. La **diffusion** est la conversion de vitesse relative
+en pression statique dans le canal : positive quand l'écoulement relatif
+ralentit (`w2 < w1`), elle **détruit** de la hauteur quand il accélère. Le terme
+**cinétique** sort en vitesse absolue et c'est à la volute de le récupérer.
+
+La somme retombe sur `u2·cu2/g` à la précision machine, et le module le vérifie :
+la décomposition ne crée rien, elle répartit. C'est ce qui la rend utile pour
+diagnostiquer — sur l'hélice toroïdale de référence le terme de diffusion est
+**négatif** et retire 5,7 m des 27,7 que l'effet centrifuge apporte ; le rapport
+le signale explicitement.
+
 ### Comparer deux conceptions : ce que le rendement de la SPEC ne sait pas faire
 
 Le rendement du tableau 2 ne juge pas la forme des aubes, et il ne l'a jamais
@@ -469,7 +495,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-197 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+204 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture
@@ -504,6 +530,7 @@ impeller_analyzer/
 └── hydraulics/
     ├── meanline.py      # Euler + glissement + pertes → H-Q
     ├── losses.py        # pertes de canal, pour comparer deux conceptions
+    ├── energy.py        # bilan d'Euler : d'où vient la hauteur
     ├── cavitation.py    # NPSHr, NPSHa, vitesse maximale
     └── similarity.py    # lois de similitude, vitesse spécifique
 ```
