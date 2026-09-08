@@ -370,8 +370,12 @@ def centrifugal_impeller(
         z_mid_b = z_hi(r + step) - 0.5 * width(r + step)
         return (z_mid_b - z_mid_a) / (2.0 * step)
 
-    # Moyeu / flasque arriere : solide de revolution sous la veine.
-    bottom = z_lo(r2) - shroud_thickness
+    # Moyeu / flasque arriere : solide de revolution sous la veine.  Le fond se
+    # pose sous le **point le plus bas** de la veine : sur un flasque plat, le
+    # dessous de veine monte avec le rayon, et un fond pris au seul r2 passerait
+    # au-dessus de la veine en r1 -- le profil se croiserait et le solide serait
+    # faux.
+    bottom = min(z_lo(r1), z_lo(r2)) - shroud_thickness
     profile: list[tuple[float, float]] = [(0.0, bottom)]
     for i in range(n_radial):
         r = r1 + (r2 - r1) * i / (n_radial - 1)

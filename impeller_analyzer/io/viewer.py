@@ -26,7 +26,7 @@ from . import plot
 
 #: Classes de facette rendues dans la vue.
 CLASS_SOLID = 0  # moyeu, flasque : f >= F_SOLIDE juste sous la surface
-CLASS_BLADE = 1  # pale : F_VIDE < f < F_SOLIDE
+CLASS_BLADE = 1  # pale : F_MATIERE < f < F_SOLIDE, comme la zone de pales de l'analyse
 CLASS_OTHER = 2  # non classee
 
 #: Niveaux de confiance en francais, pour le bandeau de la page.
@@ -49,7 +49,7 @@ def classify_faces(mesh: TriMesh, occupancy: OccupancyMap) -> list[int]:
         value = occupancy.value(math.hypot(point[0], point[1]), point[2])
         if value >= config.F_SOLIDE:
             classes.append(CLASS_SOLID)
-        elif value > config.F_VIDE:
+        elif value > config.F_MATIERE:
             classes.append(CLASS_BLADE)
         else:
             classes.append(CLASS_OTHER)

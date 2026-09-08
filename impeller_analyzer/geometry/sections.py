@@ -154,7 +154,18 @@ class Section:
     profiles: list[Profile] = field(default_factory=list)
 
     def usable(self) -> list[Profile]:
-        """Profils exploitables : assez de points et enroulement raisonnable."""
+        """Profils exploitables : assez de points et enroulement raisonnable.
+
+        Il a ete tente d'y ajouter un tri sur la portee meridienne, pour ecarter
+        les fragments que rend une coupe qui effleure l'aube au lieu de la
+        traverser.  Le tri se retourne contre un maillage grossier : a 20 % des
+        triangles, les profils legitimes deviennent eux-memes courts et sont
+        emportes, et beta2 derive de quatre degres -- au-dela de ce que la SPEC
+        8.4 tolere.  Le cas des fragments est traite ailleurs, et mieux : le
+        controle d'enroulement (`wrap_consistency`) confronte l'enroulement
+        mesure a celui qu'impliquent les angles lus, et l'analyse bascule sur
+        les normales quand les deux se contredisent.
+        """
         return [
             profile for profile in self.profiles
             if len(profile) >= config.MIN_PROFILE_POINTS

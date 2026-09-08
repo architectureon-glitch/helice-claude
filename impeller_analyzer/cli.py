@@ -120,7 +120,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def options_from_args(args: argparse.Namespace) -> Options:
-    """Convertit les arguments de la ligne de commande en options d'analyse."""
+    """Convertit les arguments de la ligne de commande en options d'analyse.
+
+    Le domaine des entrees est controle par `Options.check`, appele par
+    `run` : la ligne de commande, la page web et l'appel direct passent ainsi
+    par la meme definition.
+    """
     return Options(
         unit=args.unit,
         r_aspiration_cm=args.r_aspiration,
@@ -210,3 +215,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.quiet:
         print(summarise(result, produced))
     return 0
+
+
+# `python -m impeller_analyzer.cli roue.stl` est une faute de frappe naturelle
+# pour `python -m impeller_analyzer roue.stl` : sans ce garde-fou elle rendait
+# la main sans rien dire ni rien ecrire, code de sortie zero -- le pire des
+# comportements pour qui cherche pourquoi son rapport n'est pas la.
+if __name__ == "__main__":  # pragma: no cover - execution directe du module
+    sys.exit(main())

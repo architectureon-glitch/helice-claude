@@ -91,15 +91,31 @@ class OccupancyMap:
         return [[value >= config.F_SOLIDE for value in row] for row in self.f]
 
     def blade_mask(self) -> list[list[bool]]:
-        """Cellules de la zone de pales : `F_VIDE < f < F_SOLIDE`."""
+        """Cellules de la zone de pales : de la matiere, mais pas une revolution.
+
+        La borne basse est `F_MATIERE` et non `F_VIDE` : l'occupation angulaire
+        d'une pale vaut `N e / (2 pi r)`, qui tombe sous `F_VIDE` des que les
+        pales sont peu nombreuses ou minces au grand rayon -- quatre pales de
+        4 mm a r = 90 mm donnent 0.017.  Un seuil fixe y perdait une couronne
+        entiere, et le filtre d'ilots, la couronne exterieure devenue isolee
+        avec elle : le rayon de sortie s'en trouvait raccourci de 4 %, et la
+        hauteur, qui va comme `u2**2`, de 8 %.  Les ilots parasites que ce seuil
+        bas laisse passer sont ecartes par `clean_blade_mask`, dont c'est le
+        role.
+        """
         return [
-            [config.F_VIDE < value < config.F_SOLIDE for value in row]
+            [config.F_MATIERE < value < config.F_SOLIDE for value in row]
             for row in self.f
         ]
 
     def void_mask(self) -> list[list[bool]]:
-        """Cellules de veine fluide ou exterieures : `f <= F_VIDE`."""
-        return [[value <= config.F_VIDE for value in row] for row in self.f]
+        """Cellules sans matiere : veine fluide ou exterieur, `f <= F_MATIERE`.
+
+        La frontiere est la meme que celle de `blade_mask`, sans quoi les trois
+        masques ne partitionneraient plus la grille : une cellule portant quatre
+        pales minces au grand rayon serait a la fois de la pale et du vide.
+        """
+        return [[value <= config.F_MATIERE for value in row] for row in self.f]
 
     def theta_signal(self, mask: list[list[bool]] | None = None) -> list[float]:
         """Signal `g(theta)` : occupation integree sur les cellules de `mask`.

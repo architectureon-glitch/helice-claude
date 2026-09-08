@@ -17,6 +17,12 @@ tronçons, relevee rayon par rayon.  Elle vaut 0.95 a 1.00 sur toute la portee
 d'une aube toroidale et retombe au bout, la ou les brins fusionnent ; sur une
 roue centrifuge fermee ordinaire elle ne depasse pas 0.25, sur une helice axiale
 elle est nulle.
+
+Cette signature est **topologique**, et un maillage non etanche n'a pas de
+topologie : ses trous dedoublent les tronçons exactement comme le ferait une
+boucle.  Le verdict est donc suspendu sur un maillage troue -- dire "toroidal"
+la ou il n'y a que des trous serait la pire des sorties, puisque c'est ce mot
+qui met de cote la cambrure et invalide toute la ligne moyenne.
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ class LoopResult:
     """Ce que la lecture des tronçons en hauteur a conclu."""
 
     looped: bool = False
+    undecided: bool = False
     peak_fraction: float = 0.0
     r_inner: float = 0.0
     r_outer: float = 0.0
@@ -60,6 +67,7 @@ class LoopResult:
         """Vue serialisable, en SI."""
         return {
             "aubes_en_boucle": self.looped,
+            "verdict_suspendu": self.undecided,
             "fraction_dedoublee_max": self.peak_fraction,
             "rayon_interieur_de_boucle_m": self.r_inner or None,
             "rayon_exterieur_de_boucle_m": self.r_outer or None,
@@ -104,9 +112,17 @@ def doubling_profile(
 
 
 def detect_looped_blades(
-    occupancy: OccupancyMap, n_blades: int, blade_mask: list[list[bool]] | None = None
+    occupancy: OccupancyMap,
+    n_blades: int,
+    blade_mask: list[list[bool]] | None = None,
+    watertight: bool = True,
 ) -> LoopResult:
-    """Dit si les aubes se referment sur elles-memes (type toroidal)."""
+    """Dit si les aubes se referment sur elles-memes (type toroidal).
+
+    `watertight` dit si le maillage a survecu a la reparation sans arete de
+    bord.  Faux, la lecture est rendue sans verdict : un maillage troue produit
+    la meme signature qu'une boucle.
+    """
     from .topology import clean_blade_mask
 
     result = LoopResult(n_blades=n_blades)
@@ -132,8 +148,23 @@ def detect_looped_blades(
         )
         return result
 
-    result.looped = True
     result.r_inner, result.r_outer = min(doubled), max(doubled)
+    if not watertight:
+        # Les trous d'un maillage non etanche coupent les tronçons en deux
+        # exactement comme le ferait une boucle : la mesure ne distingue plus
+        # les deux, et l'annoncer toroidal ecarterait la cambrure a tort.
+        result.undecided = True
+        result.confidence = LOW
+        result.warnings.append(
+            f"une coupe a azimut fixe traverse la zone de pales deux fois sur "
+            f"{result.peak_fraction:.0%} des azimuts, ce qui est la signature d'aubes en boucle "
+            "(type toroidal) -- mais le maillage n'est pas etanche, et ses trous donnent la meme "
+            "signature. Le verdict est suspendu : les angles restent lus sur la cambrure. "
+            "Reparez le maillage pour trancher."
+        )
+        return result
+
+    result.looped = True
     beyond = [r for r, fraction in profile
               if r > result.r_outer and fraction < config.LOOP_DOUBLE_FRACTION]
     result.merge_radius = min(beyond) if beyond else 0.0

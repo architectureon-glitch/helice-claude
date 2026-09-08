@@ -207,7 +207,7 @@ def _hub_index(row: list[float]) -> int:
 def _outer_index(row: list[float]) -> int:
     """Plus grand index radial ou il y a de la matiere."""
     for ir in range(len(row) - 1, -1, -1):
-        if row[ir] > config.F_VIDE:
+        if row[ir] > config.F_MATIERE:
             return ir
     return -1
 
@@ -255,7 +255,7 @@ def _shroud_eye(occupancy: OccupancyMap, iz_1: int) -> tuple[int, int]:
         # couronne, pas sur la vacuite de l'oeillard : une roue fermee peut
         # tres bien porter un bossage d'arbre en son centre, qui donnera r_1h.
         inner = outer
-        while inner > 0 and row[inner - 1] > config.F_VIDE:
+        while inner > 0 and row[inner - 1] > config.F_MATIERE:
             inner -= 1
         if inner == 0:  # la matiere touche l'axe : ce n'est pas un flasque perce
             continue
@@ -271,7 +271,7 @@ def _shroud_present(row: list[float]) -> bool:
     seen_blade = False
     for ir in range(_hub_index(row) + 1, len(row)):
         value = row[ir]
-        if config.F_VIDE < value < config.F_SOLIDE:
+        if config.F_MATIERE < value < config.F_SOLIDE:
             seen_blade = True
         elif value >= config.F_SOLIDE and seen_blade:
             return True
@@ -332,7 +332,7 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
     if not blade_rows:
         topology.warnings.append(
             "aucune zone de pales identifiee : la geometrie est-elle un solide de "
-            "revolution, ou les seuils F_VIDE / F_SOLIDE sont-ils a revoir ?"
+            "revolution, ou les seuils F_MATIERE / F_SOLIDE sont-ils a revoir ?"
         )
         topology.confidence.set("rayons", LOW)
         topology.confidence.set("type_de_roue", LOW)
@@ -341,7 +341,7 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
     # Rayon exterieur de la matiere : c'est le diametre hors tout de la piece.
     r_tip_index = 0
     for ir in range(nr - 1, -1, -1):
-        if any(occupancy.f[iz][ir] > config.F_VIDE for iz in range(nz)):
+        if any(occupancy.f[iz][ir] > config.F_MATIERE for iz in range(nz)):
             r_tip_index = ir
             break
     topology.r_tip = occupancy.r_centres[r_tip_index]

@@ -463,6 +463,111 @@ Deux précisions de moindre portée :
   et non en pour-cent : 2 % n'a pas de sens sur un angle qui varie fortement le
   long de la pale.
 
+## Audit : ce qu'une relecture complète de l'outil a corrigé
+
+### Ce que le banc d'audit a trouvé
+
+Les tests par phase vérifient chacun un mécanisme sur une forme choisie pour
+lui. Un banc distinct ([`tests/test_audit_geometrique.py`](tests/test_audit_geometrique.py))
+fait l'inverse : il balaie des roues **entières**, de proportions, d'angles et
+de nombres d'aubes variés, et confronte chaque grandeur relue à celle qui a été
+dessinée. Ce sont les cas où les mécanismes se contredisent qu'il cherche, et
+quatre défauts y sont apparus.
+
+**Le seuil de présence de matière dépendait du nombre d'aubes.** L'occupation
+angulaire d'une pale vaut `N·e / (2πr)` : quatre pales de 4 mm à r = 90 mm
+donnent 0.017, sous le seuil `F_VIDE = 0.02` qui séparait le vide de la
+matière. Une couronne entière passait pour du vide, le filtre d'îlots emportait
+avec elle toute la bande extérieure devenue isolée, et **r2 se raccourcissait de
+4 % — donc la hauteur, qui va comme `u2²`, de 8 %**. Toute roue à pales peu
+nombreuses ou minces au grand rayon était concernée. `F_MATIERE = 1e-4` sépare
+désormais « il y a de la matière » de « la cellule est de la veine fluide », et
+les îlots parasites que ce seuil bas laisse passer sont écartés par le filtre
+dont c'est le rôle. Sur six aubes, rien ne change ; sur quatre, l'écart sur r2
+passe de −3.7 % à −0.4 %.
+
+**Un verdict topologique était rendu sur un maillage qui n'a pas de topologie.**
+Les trous d'un fichier déchiré coupent les tronçons en hauteur exactement comme
+le ferait une aube en boucle : une roue centrifuge ordinaire, privée de 20 % de
+ses triangles, était annoncée **toroïdale**. C'est la pire des sorties, puisque
+c'est ce mot qui met la cambrure de côté et invalide toute la ligne moyenne. Le
+verdict est maintenant suspendu quand le maillage n'est pas étanche : la
+signature est relevée et dite, la conclusion ne l'est pas, et le message demande
+de réparer le fichier. (Ceci ne concerne pas la décimation de la phase 8.4, qui
+procède par effondrement d'arêtes et préserve l'étanchéité.)
+
+**Une roue fermée à flasque plat était annoncée toroïdale elle aussi**, mais
+pour une autre raison : le générateur posait le fond du moyeu sous la veine au
+seul rayon extérieur. Sur un flasque plat le dessous de veine monte avec le
+rayon, ce fond passait donc au-dessus de la veine à l'ouïe, le profil méridien
+se croisait et le solide sortait creux. Défaut du générateur, pas de l'analyse —
+mais il produisait un faux positif parfaitement crédible.
+
+**Le même bloc de 86 lignes était défini deux fois** dans `blade_angles.py`
+(`_local_derivatives`, `_taper_rates`, `_trim_ends`, `beta_windows`), la seconde
+définition masquant silencieusement la première. Les corps étaient identiques à
+un texte de docstring près, donc sans effet sur les résultats ; le doublon est
+supprimé.
+
+Deux constantes de `config.py` ne servaient plus (`GRID_R_MARGIN`,
+`CAMBER_ITERATIONS`, cette dernière héritée d'une méthode de cambrure
+abandonnée) : une constante que personne ne lit est un mensonge sur le code,
+elles sont retirées.
+
+### Le vrillage est lu aplati
+
+β1 et β2 sont pris comme la moyenne sur les dix premiers et dix derniers pour
+cent de corde. Une moyenne de fenêtre rend la valeur au **milieu** de la
+fenêtre, pas à son bord : la lecture rabat donc les deux extrémités vers la
+moyenne. Mesuré sur des roues d'angles connus :
+
+| dessiné | relu | écart |
+|---|---|---|
+| 15 / 20 | 14.5 / 19.5 | −0.5 / −0.5 |
+| 20 / 25 | 20.7 / 24.3 | +0.7 / −0.7 |
+| 20 / 35 | 21.5 / 32.5 | +1.5 / −2.5 |
+| 30 / 40 | 31.2 / 38.2 | +1.2 / −1.8 |
+| 35 / 50 | 36.8 / 47.3 | +1.8 / −2.7 |
+| 40 / 65 | 43.0 / 60.4 | +3.0 / −4.6 |
+
+Le sens est constant — β1 trop grand, β2 trop petit — et l'écart croît avec le
+vrillage : la lecture en restitue 60 à 90 %. Évaluer la fenêtre à son bord par
+une droite des moindres carrés plutôt qu'en son milieu gagne un degré au-delà de
+50°, mais **en perd deux sous 20°**, là où sont les aubes de pompe : la
+correction a été mesurée puis écartée. Le biais est donc chiffré et dit — le
+rapport porte une note qui encadre le vrillage réel — plutôt que déplacé.
+Au-delà, le corriger demanderait de caler une loi d'aube, et celle des roues de
+synthèse n'est pas celle des roues réelles.
+
+### Les réserves d'une lecture écartée portent maintenant leur étiquette
+
+Sur une roue toroïdale, la cambrure est mise de côté au profit des normales,
+mais elle a déjà produit ses réserves — dont « β2 = 86° : aubes quasi radiales »,
+imprimé à côté d'un tableau qui publie **3.6°**. Un paragraphe d'introduction
+n'y suffisait pas : qui parcourt les puces lit les deux chiffres et ne sait
+lequel croire. Chaque réserve issue de la lecture écartée porte désormais
+`[lecture par la cambrure, écartée]` en tête.
+
+Et la confrontation entre le sens imposé et celui que suggère la géométrie était
+faite **avant** le repli : elle nommait donc le sens lu par la cambrure, alors
+que le rapport publie celui des normales — les deux pouvant différer. Elle est
+maintenant rendue une fois la lecture des angles arrêtée.
+
+### Le domaine des entrées est contrôlé à la porte
+
+`--grille 0 0` sortait en `ZeroDivisionError`, `--secteurs 1` en « inf n'est pas
+sérialisable en JSON », et un régime négatif passait pour une « géométrie
+dégénérée ». Chaque borne est maintenant celle d'un modèle nommé — domaine de la
+corrélation d'Antoine pour la température, troposphère du modèle d'atmosphère
+OACI pour l'altitude, finesse sous laquelle la carte d'occupation ne résout plus
+rien pour la grille — et le contrôle est porté par `Options.check`, appelé par
+`run` : la ligne de commande, la page web et l'appel direct passent par la même
+définition.
+
+`python -m impeller_analyzer.cli roue.stl` — faute de frappe naturelle pour
+`python -m impeller_analyzer roue.stl` — rendait la main sans rien dire ni rien
+écrire, code de sortie zéro. Le module a maintenant son garde `__main__`.
+
 ## Validation
 
 ```bash
@@ -519,8 +624,9 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-207 tests, une phase par module. Ils passent aussi sous `pytest` si vous
-l'avez : ce sont des `unittest.TestCase`.
+223 tests : une phase par module, plus le banc d'audit qui balaie des roues
+entières et confronte chaque grandeur relue au dessin. Ils passent aussi sous
+`pytest` si vous l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture
 

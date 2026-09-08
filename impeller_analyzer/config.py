@@ -71,8 +71,8 @@ GRID_NZ = 200  # cellules axiales de la carte f(r, z) (SPEC 2.2)
 N_THETA = 720  # echantillons angulaires du signal g(theta) (SPEC 2.2 et 3.1)
 F_SOLIDE = 0.98  # - - seuil de fraction angulaire au-dela duquel la cellule est du moyeu/flasque
 F_VIDE = 0.02  # - - seuil en deca duquel la cellule est de la veine fluide ou l'exterieur
+F_MATIERE = 1e-4  # - - seuil de **presence de matiere** dans une cellule, distinct de F_VIDE : l'occupation angulaire d'une pale vaut N.e / (2.pi.r), soit 0.017 pour quatre pales de 4 mm a r = 90 mm -- sous F_VIDE, alors que la matiere y est bien
 
-GRID_R_MARGIN = 1e-9  # m - retrait applique aux bornes de la grille pour eviter les tangences exactes
 SLICE_EPS_REL = 1e-9  # - - tolerance relative de coupe plan/triangle (fraction de la taille de bbox)
 OCCUPANCY_MIN_CELL = 1e-12  # m - taille minimale d'une cellule, garde-fou contre les bbox degenerees
 
@@ -107,7 +107,6 @@ BETA_CHORD_FRACTION = 0.10  # - - fraction de corde sur laquelle sont moyennes b
 CAMBER_END_TRIM = 1.0  # epaisseurs - longueur ecartee a chaque bout de corde (zone des faces de bout)
 CAMBER_TRIM_TAPER = 2.0  # - - vitesse d'ouverture d'epaisseur, en multiples de e_max/corde, marquant une face de bout
 CAMBER_MIN_STATIONS = 6  # stations - nombre minimal conserve apres ecretage des bouts
-CAMBER_ITERATIONS = 3  # - - passes de recalage de la coupe perpendiculairement a la cambrure locale
 SPLINE_LAMBDA_MIN = 1e-18  # - - borne basse de la recherche du parametre de penalisation
 SPLINE_LAMBDA_MAX = 1e12  # - - borne haute de la recherche du parametre de penalisation
 SPLINE_BISECTION_STEPS = 80  # - - iterations de bissection sur log(lambda)
@@ -125,6 +124,11 @@ BETA_SENSITIVITY_DEG = 1.0  # deg - perturbation de beta2 servant a chiffrer la 
 BETA_SENSITIVITY_ALERT = 0.18  # - - ecart relatif de hauteur au-dela duquel la sensibilite a beta2 est signalee
 SECTION_REFINE_STEPS = 6  # - - bissections de recalage d'un point de coupe sur la surface exacte
 SECTION_MAX_WRAP = 5.235987755982989  # rad - enroulement maximal d'un profil de pale, 300 deg (au-dela : contour de revolution, moyeu ou flasque, qui fait le tour complet)
+WRAP_CONSISTENCY_MIN = 0.40  # - - enroulement mesure / enroulement implique par beta, en deca duquel la cambrure se contredit
+WRAP_CONSISTENCY_MAX = 2.50  # - - meme rapport, au-dela duquel elle se contredit aussi
+TWIST_NOTE_DEG = 8.0  # degres - vrillage beta2 - beta1 au-dela duquel l'aplatissement de la lecture est signale a l'utilisateur
+TWIST_RECOVERY_MIN = 0.60  # - - part basse du vrillage reel que la lecture restitue (mesure sur roues de synthese 20/35 a 40/65, voir tests/test_audit_geometrique.py)
+TWIST_RECOVERY_MAX = 0.90  # - - part haute du vrillage reel que la lecture restitue (meme source)
 CHORD_THICKNESS_MIN = 2.0  # - - rapport corde/epaisseur en deca duquel un profil est juge mal conditionne
 
 # ---------------------------------------------------------------------------
@@ -167,6 +171,7 @@ SIMILARITY_TOL = 0.02  # - - ecart maximal admis entre calcul direct et similitu
 DEFAULT_RPM = (1000.0, 2000.0, 3000.0)  # tr/min - regimes analyses par defaut (SPEC 0.4)
 BETA_MIN_DEG = 1.0  # degres - garde-fou bas sur beta1/beta2 (evite tan(beta) -> 0)
 BETA_MAX_DEG = 89.0  # degres - garde-fou haut sur beta1/beta2 (evite tan(beta) -> inf)
+BETA_CLAMP_TOL = 0.05  # degres - distance a une borne en deca de laquelle un angle est declare ecrete, non mesure
 Q_MIN_RELATIVE = 1e-6  # - - debit plancher du balayage, en fraction de Q_n (evite la division par zero)
 
 # ---------------------------------------------------------------------------
@@ -179,6 +184,16 @@ NSS_EXPONENT = 4.0 / 3.0  # - - exposant de la methode B du NPSHr (SPEC 6.1)
 MARGE_NPSH = 1.30  # - - marge de securite NPSHa/NPSHr imposee (SPEC 6.3)
 W1S_MAX = 30.0  # m/s - vitesse relative maximale admise en entree, eau/roue metallique (SPEC 6.3)
 RPM_ROUNDING = 10.0  # tr/min - pas d'arrondi (a la dizaine inferieure) de la vitesse maximale (SPEC 6.3)
+
+# ---------------------------------------------------------------------------
+# Domaine des entrees : bornes au-dela desquelles les modeles ne valent plus
+# ---------------------------------------------------------------------------
+RPM_MAX = 100000.0  # tr/min - regime au-dela duquel l'entree releve de la faute de frappe, pas de la pompe
+GRID_MIN = 20  # cellules - grille minimale en r et en z sous laquelle plus rien ne se resout
+N_THETA_MIN = 24  # secteurs - discretisation azimutale minimale : quatre points par pale a six pales
+TEMPERATURE_MIN = 1.0  # degres C - borne basse du domaine de la correlation d'Antoine
+TEMPERATURE_MAX = 100.0  # degres C - borne haute du domaine d'Antoine et de la table de masse volumique
+ALTITUDE_MAX = 11000.0  # m - plafond de la troposphere, borne haute du modele d'atmosphere OACI
 
 # ---------------------------------------------------------------------------
 # Installation par defaut
@@ -233,4 +248,5 @@ VALID_BETA_DEG = 2.0  # degres - ecart absolu admis sur beta1 et beta2 (SPEC 8.1
 VALID_REFERENCE_TOL = 0.18  # - - ecart relatif admis sur H au BEP du cas de reference (SPEC 8.2)
 VALID_INVARIANCE_TOL = 0.005  # - - ecart relatif admis apres rotation/translation (SPEC 8.3)
 VALID_DECIMATION_DEG = 3.0  # degres - ecart admis sur beta2 apres decimation a 20 % (SPEC 8.4)
+VALID_BETA_NORMALS_DEG = 5.0  # degres - ecart absolu admis quand les angles sont lus sur les normales et non sur la cambrure : la methode est basse de 2 a 5 degres sur des roues d'angles connus, biais mesure et non corrige (voir blade_normals)
 VALID_DECIMATION_RATIO = 0.20  # - - fraction de triangles conservee par la decimation (SPEC 8.4)

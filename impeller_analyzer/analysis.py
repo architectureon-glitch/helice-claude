@@ -52,6 +52,65 @@ class Options:
     prefer_trimesh: bool = True
     symmetry_check: bool = True
 
+    def check(self) -> None:
+        """Refuse les entrees hors du domaine des modeles, avec la raison.
+
+        Chaque borne est celle d'un modele nomme, pas un garde-fou arbitraire :
+        le domaine de la correlation d'Antoine pour la temperature, la
+        troposphere du modele d'atmosphere OACI pour l'altitude, la finesse sous
+        laquelle la carte d'occupation ne resout plus rien pour la grille.  Le
+        controle est porte par les options et non par la ligne de commande, de
+        sorte que la page web et l'appel direct y passent aussi : sans lui, une
+        grille nulle sortait en `ZeroDivisionError` et deux secteurs en "inf
+        n'est pas serialisable en JSON" -- des traces de pile la ou il fallait
+        une phrase.
+        """
+        for rpm in self.speeds:
+            if not 0.0 < rpm <= config.RPM_MAX:
+                raise ValueError(
+                    f"regime hors domaine : {rpm:g} tr/min. Attendu entre 0 (exclu) et "
+                    f"{config.RPM_MAX:g} tr/min."
+                )
+        if self.blades is not None and self.blades < config.BLADES_MIN:
+            raise ValueError(
+                f"nombre de pales impose invalide : {self.blades}. Le modele en demande au "
+                f"moins {config.BLADES_MIN}."
+            )
+        for name, value in (("beta1", self.beta1_deg), ("beta2", self.beta2_deg)):
+            if value is not None and not config.BETA_MIN_DEG <= value <= config.BETA_MAX_DEG:
+                raise ValueError(
+                    f"{name} hors domaine : {value:g} degres. Attendu entre "
+                    f"{config.BETA_MIN_DEG:g} et {config.BETA_MAX_DEG:g}, angles mesures depuis "
+                    "la direction tangentielle."
+                )
+        if min(self.grid_nr, self.grid_nz) < config.GRID_MIN:
+            raise ValueError(
+                f"grille trop grossiere : {self.grid_nr}x{self.grid_nz}. Au moins "
+                f"{config.GRID_MIN} cellules dans chaque direction."
+            )
+        if self.n_theta < config.N_THETA_MIN:
+            raise ValueError(
+                f"trop peu de secteurs azimutaux : {self.n_theta}. Au moins "
+                f"{config.N_THETA_MIN}, sans quoi le nombre de pales ne se lit plus."
+            )
+        if not config.TEMPERATURE_MIN <= self.temperature_c <= config.TEMPERATURE_MAX:
+            raise ValueError(
+                f"temperature hors domaine : {self.temperature_c:g} degres C. La correlation "
+                f"d'Antoine utilisee pour la pression de vapeur vaut de "
+                f"{config.TEMPERATURE_MIN:g} a {config.TEMPERATURE_MAX:g} degres C."
+            )
+        if not 0.0 <= self.altitude <= config.ALTITUDE_MAX:
+            raise ValueError(
+                f"altitude hors domaine : {self.altitude:g} m. Le modele d'atmosphere OACI "
+                f"utilise pour la pression barometrique vaut de 0 a "
+                f"{config.ALTITUDE_MAX:g} m."
+            )
+        if self.r_aspiration_cm is not None and self.r_aspiration_cm <= 0.0:
+            raise ValueError(
+                f"rayon d'aspiration impose invalide : {self.r_aspiration_cm:g} cm. Il doit "
+                "etre positif."
+            )
+
     def to_dict(self) -> dict:
         """Vue serialisable en JSON."""
         return {
@@ -147,6 +206,7 @@ class AnalysisResult:
 def run(path: str, options: Options | None = None) -> AnalysisResult:
     """Analyse complete d'un fichier de geometrie."""
     options = options or Options()
+    options.check()
     started = time.time()
     result = AnalysisResult(options=options)
 
@@ -198,7 +258,9 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
 
     # Forme des aubes : une aube qui se referme sur elle-meme invalide tout ce
     # que la phase 4 en tirerait, la coupe la traversant deux fois.
-    loops = loops_module.detect_looped_blades(occupancy, topology.blades.n_blades)
+    loops = loops_module.detect_looped_blades(
+        occupancy, topology.blades.n_blades, watertight=import_report.watertight
+    )
     result.blade_loops = loops
     result.warnings.extend(loops.warnings)
 
@@ -215,8 +277,40 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     result.confidence.update(geometry.confidence)
     camber_warnings = list(geometry.warnings)
 
-    # Aube en boucle : la cambrure n'a pas de reponse stable, les normales si.
-    if loops.looped:
+    # Repli sur les normales. Deux cas l'appellent : une aube en boucle, ou la
+    # cambrure n'a pas de reponse stable ; et une roue trop courte radialement,
+    # ou les surfaces de courant effleurent l'aube au lieu de la traverser et ne
+    # rendent que des echardes -- ecartees, il ne reste aucune coupe. Dans les
+    # deux cas la lecture par les normales, elle, tient.
+    def _ecrete(valeur: float) -> bool:
+        """Un angle pose sur une borne du domaine est un ecretage, pas une mesure."""
+        return (
+            abs(valeur - config.BETA_MIN_DEG) < config.BETA_CLAMP_TOL
+            or abs(valeur - config.BETA_MAX_DEG) < config.BETA_CLAMP_TOL
+        )
+
+    coherence = geometry.wrap_consistency
+    incoherente = coherence > 0.0 and not (
+        config.WRAP_CONSISTENCY_MIN <= coherence <= config.WRAP_CONSISTENCY_MAX
+    )
+    camber_failed = (
+        not geometry.sections
+        or geometry.beta2_deg <= 0.0
+        or _ecrete(geometry.beta1_deg)
+        or _ecrete(geometry.beta2_deg)
+        or incoherente
+    )
+    if camber_failed and not loops.looped:
+        result.warnings.append(
+            "la lecture par la cambrure a echoue : "
+            + (f"enroulement mesure {coherence:.2f} fois celui qu'impliquent les angles lus, "
+               "les deux se contredisent" if incoherente
+               else "aucune coupe exploitable, ou un angle pose sur une borne du domaine")
+            + ". Sur une roue courte radialement les surfaces de courant effleurent l'aube au "
+            "lieu de la traverser et n'en rendent que des fragments. Les angles sont repris sur "
+            "les normales de la surface d'aube."
+        )
+    if loops.looped or camber_failed:
         normals = normals_module.analyse(aligned, occupancy, topology)
         result.blade_normals = normals
         if normals.beta1_deg > 0.0 and normals.beta2_deg > 0.0:
@@ -238,7 +332,7 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
             )
             geometry.notes.extend(normals.notes)
             geometry.warnings.append(
-                f"aubes en boucle : beta1 = {geometry.beta1_deg:.1f} deg et beta2 = "
+                f"beta1 = {geometry.beta1_deg:.1f} deg et beta2 = "
                 f"{geometry.beta2_deg:.1f} deg. Ceux que vous n'avez pas imposes sont lus sur les "
                 "normales de la surface d'aube, la cambrure n'ayant pas de reponse stable sur "
                 "cette forme ; methode basse de 2 a 5 degres sur des roues d'angles connus, biais "
@@ -259,13 +353,28 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     if result.blade_normals is not None and result.blade_normals.beta2_deg > 0.0 and camber_warnings:
         # Les reserves de la cambrure portent sur une lecture qui n'a pas ete
         # retenue : les garder sans le dire ferait croire a un doute sur les
-        # angles publies.
+        # angles publies.  Un paragraphe d'introduction n'y suffit pas -- elles
+        # citent des angles chiffres, et le lecteur qui parcourt les puces lit
+        # "beta2 = 86 deg" a cote d'un tableau qui publie 3.6 : chaque reserve
+        # porte donc sa provenance en tete.
         result.warnings.append(
             "les reserves qui suivent portent sur la lecture par la cambrure, mise de cote au "
             "profit des normales ; elles n'entament pas les angles publies, elles expliquent "
-            "pourquoi la cambrure a ete ecartee"
+            "pourquoi la cambrure a ete ecartee. Les angles qu'elles citent sont ceux de cette "
+            "lecture ecartee, pas ceux du tableau 1."
         )
+        camber_warnings = [
+            f"[lecture par la cambrure, ecartee] {warning}" for warning in camber_warnings
+        ]
     result.warnings.extend(camber_warnings)
+
+    # La confrontation entre le sens impose et celui que suggere la geometrie se
+    # fait ici, et pas dans la phase 4 : sur une aube en boucle, la suggestion
+    # vient d'etre reprise sur les normales, et la comparer plus tot aurait
+    # nomme le sens d'une lecture ecartee.
+    contradiction = blade_module.forced_rotation_warning(geometry)
+    if contradiction:
+        result.warnings.append(contradiction)
 
     # Phases 5 et 6 : hydraulique et cavitation.
     data = meanline_module.MeanlineInput.from_geometry(topology, geometry)
@@ -311,6 +420,21 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     if not result.discharge:
         result.discharge = blade_module.discharge_direction(topology, geometry)
 
+
+    # Garde-fou general : un angle pose sur une borne du domaine n'est pas une
+    # mesure, c'est un ecretage. Quelle qu'en soit la cause -- et il en reste
+    # forcement que je n'ai pas rencontrees -- il ne doit jamais sortir sans le
+    # dire.
+    if not geometry.forced_beta:
+        for nom, valeur in (("beta1", geometry.beta1_deg), ("beta2", geometry.beta2_deg)):
+            if _ecrete(valeur):
+                result.warnings.append(
+                    f"{nom} = {valeur:.1f} deg est pose sur une borne du domaine "
+                    f"({config.BETA_MIN_DEG:.0f} a {config.BETA_MAX_DEG:.0f}) : c'est un "
+                    "ecretage, pas une mesure. Les grandeurs qui en derivent ne veulent rien "
+                    f"dire ; imposez --{nom} si vous connaissez sa valeur."
+                )
+                result.confidence.set("angles_de_pale", LOW)
 
     result.confidence.set(
         "sens_de_rotation", HIGH if geometry.forced_rotation else LOW

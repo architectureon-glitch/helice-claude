@@ -84,6 +84,7 @@ class BladeGeometry:
     chord: float = 0.0
     max_thickness: float = 0.0
     pitch: float = 0.0
+    wrap_consistency: float = 0.0  # enroulement mesure / enroulement implique par beta
     n_families: int = 1  # familles de profils par coupe : 1 pour une aube simple
     n_effective_blades: int = 0  # surfaces de pale vues par l'ecoulement sur un tour
     rotation_sign: int = 0  # +1 anti-horaire vu de +Z, -1 horaire, 0 non renseigne
@@ -106,6 +107,7 @@ class BladeGeometry:
             "corde_m": self.chord,
             "epaisseur_max_m": self.max_thickness,
             "pas_helicoidal_m": self.pitch,
+            "coherence_enroulement": self.wrap_consistency,
             "familles_de_profils": self.n_families,
             "aubes_effectives": self.n_effective_blades,
             "sens_de_rotation": self.rotation_label,
@@ -465,6 +467,13 @@ def section_angles(
         # Le rayon de deroulement du profil est celui qui doit servir a la
         # conversion dt -> dtheta : tout autre rayon biaise beta.
         reference = profile.reference or section.reference_radius
+        # La moyenne sur la fenetre rend l'angle au milieu de celle-ci, ce qui
+        # rabat beta1 et beta2 vers la moyenne et aplatit le vrillage : le biais
+        # va de 0.7 degre sur une aube 20/25 a 4.6 degres sur une aube 40/65.
+        # L'evaluer au bord de la fenetre par une droite des moindres carres le
+        # reduit d'un degre au-dela de 50 degres, mais en ajoute deux sous 20 --
+        # ou sont les aubes de pompe. La moyenne reste donc, et le biais est
+        # documente plutot que deplace.
         head_indices, tail_indices = beta_windows(camber)
         beta1_values.append(
             _mean(
@@ -541,92 +550,6 @@ def _cut_profile(
     return centre, abs(high[0] - low[0])
 
 
-def _local_derivatives(x: list[float], y: list[float]) -> list[float]:
-    """Derivee en chaque point par la parabole passant par ses deux voisins.
-
-    Exacte pour une parabole, y compris aux extremites et a pas irregulier.
-    """
-    length = len(x)
-    if length < 3:
-        if length == 2 and x[1] != x[0]:
-            slope = (y[1] - y[0]) / (x[1] - x[0])
-            return [slope, slope]
-        return [0.0] * length
-    out = []
-    for index in range(length):
-        i = min(max(index, 1), length - 2)
-        x0, x1, x2 = x[i - 1], x[i], x[i + 1]
-        y0, y1, y2 = y[i - 1], y[i], y[i + 1]
-        d01, d12 = x1 - x0, x2 - x1
-        if d01 == 0.0 or d12 == 0.0 or (x2 - x0) == 0.0:
-            out.append(0.0)
-            continue
-        t = x[index]
-        out.append(
-            y0 * (2.0 * t - x1 - x2) / ((x0 - x1) * (x0 - x2))
-            + y1 * (2.0 * t - x0 - x2) / (-d01 * d12)
-            + y2 * (2.0 * t - x0 - x1) / ((x2 - x0) * d12)
-        )
-    return out
-
-
-def _taper_rates(stations: list[float], thickness: list[float]) -> list[float]:
-    """Vitesse d'ouverture de l'epaisseur le long de la corde, par differences centrees."""
-    length = len(stations)
-    rates = []
-    for index in range(length):
-        low = max(0, index - 1)
-        high = min(length - 1, index + 1)
-        span = stations[high] - stations[low]
-        rates.append((thickness[high] - thickness[low]) / span if span > 0.0 else 0.0)
-    return rates
-
-
-def _trim_ends(
-    stations: list[float], thickness: list[float], chord: float, max_thickness: float
-) -> list[int]:
-    """Indices des stations exploitables, une fois les deux bouts ecartes.
-
-    Sur une face de bout, l'epaisseur mesuree s'ouvre de zero a l'epaisseur du
-    profil sur la seule longueur de cette face : la vitesse d'ouverture y est
-    d'un ordre de grandeur superieure a l'effilement normal du profil.  C'est ce
-    contraste, et non l'epaisseur elle-meme, qui delimite la zone contaminee --
-    l'epaisseur d'une aube dont beta varie du moyeu au carter varie elle aussi,
-    tout a fait legitimement.
-    """
-    length = len(stations)
-    if chord <= 0.0 or max_thickness <= 0.0:
-        return list(range(length))
-    limit = config.CAMBER_TRIM_TAPER * max_thickness / chord
-    rates = _taper_rates(stations, thickness)
-    trim = config.CAMBER_END_TRIM * max_thickness
-    first = 0
-    while first < length and (stations[first] < trim or abs(rates[first]) > limit):
-        first += 1
-    last = length - 1
-    while last > first and (stations[last] > chord - trim or abs(rates[last]) > limit):
-        last -= 1
-    kept = list(range(first, last + 1))
-    if len(kept) < config.CAMBER_MIN_STATIONS:
-        return list(range(length))
-    return kept
-
-
-def beta_windows(camber: Camber) -> tuple[list[int], list[int]]:
-    """Stations retenues pour beta1 (10 premiers % de corde) et beta2 (10 derniers).
-
-    Les stations de la cambrure ont deja ete ecretees aux deux bouts par
-    `camber_line` ; les fenetres sont donc prises depuis les extremites de la
-    partie conservee.
-    """
-    stations = camber.stations
-    window = config.BETA_CHORD_FRACTION * camber.chord
-    start, end = stations[0], stations[-1]
-    head = [i for i, u in enumerate(stations) if u <= start + window] or [0]
-    tail = [i for i, u in enumerate(stations) if u >= end - window] or [len(stations) - 1]
-    return head, tail
-
-
 def _mean(values) -> float:
     """Moyenne arithmetique d'un iterable non vide."""
     data = list(values)
@@ -647,6 +570,98 @@ def _median(values) -> float:
 # ---------------------------------------------------------------------------
 # 4.4 Sens de rotation
 # ---------------------------------------------------------------------------
+def _add_twist_note(geometry: BladeGeometry) -> None:
+    """Dit que la lecture aplatit le vrillage, et de combien.
+
+    beta1 et beta2 sont pris comme la moyenne sur les dix premiers et dix
+    derniers pour cent de corde ; une moyenne de fenetre rend la valeur au
+    milieu de celle-ci, pas a son bord. La lecture rabat donc les deux angles
+    vers la moyenne : beta1 ressort trop grand, beta2 trop petit, et l'ecart
+    croit avec le vrillage -- 0.7 degre sur une aube 20/25, 4.6 sur une aube
+    40/65. Le biais n'est pas corrige : une correction demanderait de caler une
+    loi d'aube, et celle des roues de synthese n'est pas celle des roues
+    reelles. Il est donc chiffre et dit, pour que la marge soit connue.
+    """
+    twist = geometry.beta2_deg - geometry.beta1_deg
+    if twist < config.TWIST_NOTE_DEG or geometry.forced_beta:
+        return
+    geometry.notes.append(
+        f"vrillage lu : {twist:.1f} degres du bord d'attaque au bord de fuite. La lecture prend "
+        f"chaque angle en moyenne sur un dixieme de corde, ce qui rabat les deux extremites vers "
+        f"la moyenne et restitue {config.TWIST_RECOVERY_MIN * 100.0:.0f} a "
+        f"{config.TWIST_RECOVERY_MAX * 100.0:.0f} % du vrillage reel sur des roues d'angles "
+        f"connus. Le vrillage reel est donc plutot de "
+        f"{twist / config.TWIST_RECOVERY_MAX:.1f} a {twist / config.TWIST_RECOVERY_MIN:.1f} "
+        f"degres : beta1 un peu plus petit et beta2 un peu plus grand que ceux du tableau. Biais "
+        "mesure et non corrige."
+    )
+
+
+def wrap_consistency(
+    sections: list[Section], topology: Topology, beta1_deg: float, beta2_deg: float
+) -> float:
+    """Enroulement mesure rapporte a celui qu'impliquent les angles lus.
+
+    Une aube centrifuge dont l'angle vaut `beta` s'enroule de
+    `theta = ln(r2/r1) / tan(beta)` : c'est l'integration de
+    `dtheta = dr / (r tan(beta))`. Le rapport entre l'enroulement reellement
+    mesure sur les profils et celui-la vaut donc un, a la variation de `beta` le
+    long de l'aube pres.
+
+    Loin de un, les deux lectures se contredisent, et c'est le signe que les
+    coupes n'ont pas rendu de vrais profils -- typiquement des **fragments**,
+    quand la surface de courant effleure l'aube au lieu de la traverser. Le
+    controle ne coute rien et ne suppose aucun seuil arbitraire : il confronte
+    la mesure a elle-meme.
+
+    L'enroulement retenu est le **plus grand** des profils, non leur mediane :
+    la question posee est « une vraie coupe d'aube existe-t-elle ? », et une
+    seule suffit a repondre oui. La mediane, elle, se laisse noyer par les
+    fragments des qu'ils sont nombreux -- sur un maillage decime a 20 % elle
+    tombe a 7 degres pendant que les vrais profils en font 148, et le controle
+    condamnerait une lecture pourtant juste a un demi-degre pres.
+
+    Renvoie 0 quand le controle n'est pas applicable.
+    """
+    if topology.machine_type not in (CENTRIFUGAL, MIXED):
+        return 0.0
+    r_1s, r_2 = topology.r_1s, topology.r_2
+    if r_1s <= 0.0 or r_2 <= r_1s:
+        return 0.0
+    beta = math.radians(_clamp_beta(0.5 * (beta1_deg + beta2_deg)))
+    if math.tan(beta) <= 0.0:
+        return 0.0
+    attendu = math.log(r_2 / r_1s) / math.tan(beta)
+    mesures = [
+        profile.reference_wrap()
+        for section in sections
+        for profile in section.usable()
+    ]
+    if not mesures or attendu <= 0.0:
+        return 0.0
+    return max(mesures) / attendu
+
+
+def forced_rotation_warning(geometry: "BladeGeometry") -> str:
+    """Reserve a emettre quand le sens impose contredit celui que lit la geometrie.
+
+    Chaine vide s'il n'y a rien a dire : sens non impose, aucune suggestion, ou
+    les deux d'accord.  A appeler **apres** que la lecture des angles est
+    arretee : sur une aube en boucle, la suggestion vient des normales et non de
+    la cambrure, et la citer trop tot nommerait le sens d'une lecture ecartee.
+    """
+    if not geometry.forced_rotation or not geometry.observed_rotation_sign:
+        return ""
+    if geometry.observed_rotation_sign == geometry.rotation_sign:
+        return ""
+    return (
+        "le sens impose est l'inverse de ce que suggere la geometrie "
+        f"({geometry.observed_rotation_label}). C'est le sens impose qui est retenu ; "
+        "verifiez qu'il correspond bien a la piece, la suggestion pouvant se tromper "
+        "sur une aube quasi radiale ou une roue a la frontiere de deux familles."
+    )
+
+
 def rotation_sense(machine_type: str, slope_sign: int) -> int:
     """Signe de omega, +1 anti-horaire vu de +Z (cote aspiration), -1 horaire.
 
@@ -772,6 +787,10 @@ def analyse(
             math.radians(_clamp_beta(geometry.beta2_deg))
         )
 
+        geometry.wrap_consistency = wrap_consistency(
+            sections, topology, geometry.beta1_deg, geometry.beta2_deg
+        )
+        _add_twist_note(geometry)
         geometry.confidence.set("angles_de_pale", _angle_confidence(per_section, geometry))
         geometry.confidence.set(
             "sens_de_rotation", _rotation_confidence(topology, geometry, per_section)
@@ -790,16 +809,12 @@ def analyse(
         geometry.notes.append(
             f"sens de rotation impose par l'utilisateur : {rotation_label(geometry.rotation_sign)}"
         )
-        if (
-            geometry.observed_rotation_sign
-            and geometry.observed_rotation_sign != geometry.rotation_sign
-        ):
-            geometry.warnings.append(
-                "le sens impose est l'inverse de ce que suggere la geometrie "
-                f"({geometry.observed_rotation_label}). C'est le sens impose qui est retenu ; "
-                "verifiez qu'il correspond bien a la piece, la suggestion pouvant se tromper "
-                "sur une aube quasi radiale ou une roue a la frontiere de deux familles."
-            )
+        # La comparaison entre le sens impose et celui que suggere la geometrie
+        # n'est pas faite ici : sur une aube en boucle, la suggestion est reprise
+        # sur les normales apres coup, et une comparaison faite maintenant
+        # citerait celle de la cambrure -- ecartee. Elle est rendue par
+        # `forced_rotation_warning`, que l'analyse appelle une fois la lecture
+        # des angles arretee.
     else:
         geometry.rotation_sign = 0
         geometry.confidence.set("sens_de_rotation", LOW)
