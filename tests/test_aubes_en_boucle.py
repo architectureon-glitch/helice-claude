@@ -123,6 +123,53 @@ class TestAnglesParNormales(BaseTestCase):
         self.assertTrue(any("axiale" in note for note in got.notes))
 
 
+class TestRoueToroidale(BaseTestCase):
+    """Le generateur de roue de pompe a aubes en boucle, distinct de l'helice nue."""
+
+    def test_topologie_de_boucle_reconnue(self):
+        """Deux brins au milieu, un seul au bout : c'est ce qu'il doit produire."""
+        roue = synthetic.toroidal_impeller(n_blades=3)
+        occupancy = occupancy_of(roue, grid=150, n_theta=300)
+        mask = topo.clean_blade_mask(occupancy.blade_mask())
+        result = loops.detect_looped_blades(occupancy, 3, mask)
+        self.assertTrue(result.looped)
+        self.assertGreaterEqual(result.peak_fraction, config.LOOP_DOUBLE_FRACTION)
+        self.assertGreater(result.merge_radius, 0.0)
+
+    def test_enveloppe_respectee(self):
+        """Les rubans sont verticaux : ils ne debordent pas en rayon."""
+        import math
+
+        roue = synthetic.toroidal_impeller(r2=0.1670)
+        rayon = max(math.hypot(v[0], v[1]) for v in roue.vertices)
+        self.assertLessEqual(rayon, 0.1670 * 1.005)
+
+    def test_redresser_les_aubes_raccourcit_le_canal(self):
+        """Le gain d'une aube en boucle redressee passe par le frottement.
+
+        A beta2 faible le canal s'allonge -- `L = (r2-r1)/sin(beta)` -- et la
+        boucle presente deux fois ses faces sur toute cette longueur. C'est la
+        que se joue son rendement, non dans la diffusion, qui reste ici proche
+        de zero d'un bout a l'autre.
+        """
+        from impeller_analyzer.analysis import Options as O
+
+        mesures = {}
+        for beta2 in (8.0, 32.0):
+            roue = synthetic.toroidal_impeller(beta1_deg=9.0, beta2_deg=beta2,
+                                               b1=0.044, b2=0.042, thickness=0.014)
+            path = self.path(f"m{beta2:.0f}.stl")
+            writer.write_stl(roue, path, unit_factor=config.UNIT_FACTOR)
+            result = run(path, O(unit="cm", speeds=(1450.0,), grid_nr=140, grid_nz=140,
+                                 n_theta=300, symmetry_check=False, rotation=1,
+                                 blades=3, beta1_deg=9.0, beta2_deg=beta2))
+            mesures[beta2] = result.channel_losses
+        couche, droite = mesures[8.0], mesures[32.0]
+        self.assertGreater(couche.slenderness, 2.0 * droite.slenderness)
+        self.assertGreater(couche.wetted_area, 2.0 * droite.wetted_area)
+        self.assertGreater(droite.efficiency, couche.efficiency)
+
+
 class TestConsequences(BaseTestCase):
     def _run(self, mesh, **kwargs):
         path = self.path("helice.stl")

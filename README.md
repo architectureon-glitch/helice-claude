@@ -284,6 +284,30 @@ opposées** (`ω = +signe(k)` pour l'axial et le mixte, `−signe(dθ/dr)` pour 
 centrifuge). À cheval sur la frontière, le sens annoncé est un tirage au sort :
 il est désormais signalé comme tel, et sa confiance forcée au plus bas.
 
+### Optimiser une roue à aubes en boucle plutôt que la remplacer
+
+`synthetic.toroidal_impeller` engendre une roue de pompe à aubes toroïdales —
+distincte de l'hélice nue de `toroidal_propeller`. Chaque aube y est faite de
+deux **rubans** suivant la même loi de cambrure, l'un contre le dessus de la
+veine, l'autre contre le dessous, qui se rejoignent avant le rayon extérieur
+pour ne faire qu'une aube pleine hauteur au refoulement : la topologie mesurée
+sur les roues réelles, où une coupe à azimut fixe traverse l'aube deux fois au
+milieu et une seule au bout. Les rubans sont **verticaux**, comme sur une roue
+coulée ; les prendre normaux à la veine les ferait déborder en rayon là où elle
+descend le plus fort.
+
+La roue est **ouverte** : plateau arrière, pas de flasque. C'est la seule
+configuration où la boucle sert à quelque chose — sur une roue fermée le flasque
+supprime déjà le tourbillon de bout de pale, et la boucle n'apporte que sa
+surface mouillée.
+
+Ce que le balayage montre sur cette forme : le rendement monte de 79,0 à 80,1 %
+quand β2 passe de 8 à 38°, et le moteur en est le **frottement**, pas la
+diffusion. `L = (r2−r1)/sin β` fait passer l'élancement de 8,1 à 3,4 et la
+surface mouillée de 14 062 à 4 991 cm², tandis que le terme de diffusion reste
+proche de zéro d'un bout à l'autre. Une aube en boucle présente deux fois ses
+faces sur toute la longueur du canal : c'est là que se joue son rendement.
+
 ### D'où vient la hauteur
 
 `H = u2·cu2 / g` n'est pas un modèle mais un **théorème** : il sort de la
@@ -495,7 +519,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-204 tests, une phase par module. Ils passent aussi sous `pytest` si vous
+207 tests, une phase par module. Ils passent aussi sous `pytest` si vous
 l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture

@@ -528,3 +528,108 @@ def toroidal_propeller(
             phase=2.0 * math.pi * k / n_blades,
         ))
     return combine(parts)
+
+
+def toroidal_impeller(
+    n_blades: int = 3,
+    beta1_deg: float = 12.0,
+    beta2_deg: float = 22.0,
+    r1: float = 0.0927,
+    r2: float = 0.1670,
+    b1: float = 0.0340,
+    b2: float = 0.0300,
+    eye_height: float = 0.0560,
+    thickness: float = 0.0100,
+    strand_height: float = 0.0090,
+    merge_fraction: float = 0.80,
+    plate_thickness: float = 0.0120,
+    hub_segments: int = 240,
+    steps: int = 140,
+) -> TriMesh:
+    """Roue de pompe **ouverte** a aubes en boucle fermee (rubans de Mobius).
+
+    Chaque aube est faite de deux **rubans** qui suivent la meme loi de cambrure
+    -- donc le meme `beta(r)` -- l'un contre le dessus de la veine, l'autre
+    contre le dessous, et qui se rejoignent avant le rayon exterieur pour ne
+    faire qu'une aube pleine hauteur au refoulement. C'est la topologie mesuree
+    sur les roues toroidales reelles : une coupe a azimut fixe traverse l'aube
+    deux fois au milieu, une seule au bout.
+
+    La roue est **ouverte** : un plateau arriere, pas de flasque avant. C'est la
+    seule configuration ou la boucle sert a quelque chose. Sur une roue fermee le
+    flasque supprime deja le tourbillon de bout de pale, et la boucle n'apporte
+    que sa surface mouillee ; ouverte, elle supprime ce tourbillon elle-meme,
+    l'aube n'ayant plus d'extremite libre.
+
+    `strand_height` est la hauteur d'un ruban a l'oeillard ; elle croit jusqu'a
+    ce que les deux se touchent, au rayon fixe par `merge_fraction`.
+    """
+    def z_hi(r: float) -> float:
+        s = (r - r1) / (r2 - r1)
+        return eye_height * (1.0 - s)
+
+    def largeur(r: float) -> float:
+        s = (r - r1) / (r2 - r1)
+        return b1 + (b2 - b1) * s
+
+    def mid_slope(r: float) -> float:
+        step = (r2 - r1) * 1e-4
+        a = z_hi(r - step) - 0.5 * largeur(r - step)
+        b = z_hi(r + step) - 0.5 * largeur(r + step)
+        return (b - a) / (2.0 * step)
+
+    r_merge = r1 + (r2 - r1) * merge_fraction
+
+    def hauteur(r: float) -> float:
+        """Hauteur d'un ruban : elle croit jusqu'a la fusion, pleine veine au-dela."""
+        if r >= r_merge:
+            return largeur(r)
+        s = (r - r1) / (r_merge - r1)
+        return strand_height + (0.5 * largeur(r_merge) - strand_height) * s
+
+    def centre(r: float, signe: int) -> float:
+        """Cote z du milieu du ruban ; les deux se confondent au-dela de la fusion."""
+        h = hauteur(r)
+        if r >= r_merge:
+            return z_hi(r) - 0.5 * largeur(r)
+        return (z_hi(r) - 0.5 * h) if signe > 0 else (z_hi(r) - largeur(r) + 0.5 * h)
+
+    parts = [
+        revolve([(0.0, -plate_thickness), (r2, -plate_thickness), (r2, 0.0), (0.0, 0.0)],
+                hub_segments)
+    ]
+    for k in range(n_blades):
+        phase = 2.0 * math.pi * k / n_blades
+        for signe in (+1, -1):
+            rings: list[list[Vec3]] = []
+            for i in range(steps + 1):
+                r = r1 + (r2 - r1) * i / steps
+                ang = _centrifugal_theta(r, r1, r2, beta1_deg, beta2_deg, mid_slope) + phase
+                cz = centre(r, signe)
+                cx, cy = r * math.cos(ang), r * math.sin(ang)
+                ex, ey = -math.sin(ang), math.cos(ang)          # direction azimutale
+                # Ruban **vertical**, comme une aube de roue coulee : la surface
+                # est reglee perpendiculairement au plateau. Le prendre normal a
+                # la veine le ferait deborder en rayon au refoulement, la ou la
+                # veine descend le plus fort.
+                de, dh = 0.5 * thickness, 0.5 * hauteur(r)
+                rings.append([
+                    (cx + su * de * ex, cy + su * de * ey, cz + sv * dh)
+                    for su, sv in ((-1, -1), (1, -1), (1, 1), (-1, 1))
+                ])
+            vertices: list[Vec3] = [v for ring in rings for v in ring]
+            faces: list[tuple[int, int, int]] = []
+            for i in range(steps):
+                a, b = 4 * i, 4 * (i + 1)
+                for c in range(4):
+                    d = (c + 1) % 4
+                    faces.append((a + c, b + d, b + c))
+                    faces.append((a + c, a + d, b + d))
+            last = 4 * steps
+            faces.extend([(0, 1, 2), (0, 2, 3),
+                          (last, last + 2, last + 1), (last, last + 3, last + 2)])
+            ruban = TriMesh(vertices, faces)
+            if ruban.volume() < 0.0:
+                ruban = TriMesh(vertices, [(a, c, b) for a, b, c in faces])
+            parts.append(ruban)
+    return combine(parts)
