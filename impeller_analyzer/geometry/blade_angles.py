@@ -53,6 +53,7 @@ class SectionAngles:
     n_families: int = 1
     meridional_extent: float = 0.0  # etendue en m du profil le long de la veine
     radial_span: float = 0.0  # portee radiale en m, du plus petit au plus grand rayon
+    camber_ratio: float = 0.0  # fleche maximale de la ligne de cambrure / corde
 
     def to_dict(self) -> dict:
         """Vue serialisable en JSON (SI, angles en degres)."""
@@ -70,6 +71,7 @@ class SectionAngles:
             "familles": self.n_families,
             "etendue_meridienne_m": self.meridional_extent,
             "portee_radiale_m": self.radial_span,
+            "cambrure_relative": self.camber_ratio,
         }
 
 
@@ -508,6 +510,16 @@ def section_angles(
     ])
     result.radial_span = _median([
         max(profile.radius) - min(profile.radius) for profile, _ in pairs
+    ])
+    # Fleche relative de la ligne de cambrure. C'est elle qui porte la portance a
+    # incidence nulle : pour un profil mince en arc de cercle, la theorie des
+    # profils minces donne alpha_0 = -2 h/c et donc Cl(0) = 4 pi h/c. Une lecture
+    # geometrique, la ou un modele d'helice courant demande a l'utilisateur de
+    # taper un Cl de dessin qu'il ne connait pas.
+    result.camber_ratio = _median([
+        max(abs(offset) for offset in camber.offsets) / camber.chord
+        for camber in cambers
+        if camber.offsets and camber.chord > 0.0
     ])
     return result, cambers
 

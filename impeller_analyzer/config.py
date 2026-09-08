@@ -186,6 +186,34 @@ W1S_MAX = 30.0  # m/s - vitesse relative maximale admise en entree, eau/roue met
 RPM_ROUNDING = 10.0  # tr/min - pas d'arrondi (a la dizaine inferieure) de la vitesse maximale (SPEC 6.3)
 
 # ---------------------------------------------------------------------------
+# Propulsion : helice libre, element de pale et quantite de mouvement (BEM)
+# ---------------------------------------------------------------------------
+BEM_STATIONS = 24  # stations radiales du bilan par element de pale
+BEM_MAX_ITERATIONS = 200  # bissections maximales de la resolution en phi
+BEM_TOLERANCE = 1e-9  # rad - largeur d'intervalle sous laquelle la bissection sur phi s'arrete
+BEM_PHI_MIN = 0.0020  # rad - borne basse de la bissection sur l'angle d'ecoulement
+BEM_PHI_MAX = 1.5688  # rad - borne haute de la bissection, pi/2 moins deux milliradians
+BEM_SWIRL_FLOOR = 0.05  # - - plancher de (1 + k') dans le bilan de couple : sous zero, la giration induite depasserait a l'envers la vitesse d'entrainement, ce qui n'a pas de sens
+BEM_INDUCTION_MAX = 0.40  # - - facteur d'induction axial au-dela duquel la theorie de la quantite de mouvement cesse de valoir (etat de sillage turbulent, Glauert 1926)
+BEM_ROOT_CUTOFF = 0.02  # - - fraction de rayon retiree en pied et en bout, ou la portance s'annule
+CL_ALPHA = 6.10  # rad^-1 - pente de portance d'un profil mince reel (2 pi corrige de la viscosite, Abbott & von Doenhoff)
+CL_STALL = 1.40  # - - portance maximale avant decrochage d'un profil d'helice usuel
+CL_MIN = -0.80  # - - portance minimale (decrochage negatif, fonctionnement en moulinet)
+CD_INDUCED_K = 0.020  # - - coefficient du terme quadratique de la polaire, cd = cd0 + k (cl - cl_min_drag)^2
+CD_MIN_DRAG_CL = 0.20  # - - portance au minimum de trainee du profil
+CD_BASE = 0.0090  # - - trainee de profil a portance nulle, aube usinee lisse (Re ~ 1e6)
+CD_THICKNESS_K = 0.060  # - - part de trainee ajoutee par l'epaisseur relative, cd0 = CD_BASE + k (e/c)
+CAMBER_ALPHA0_FACTOR = 2.0  # - - angle de portance nulle d'un arc de cercle : alpha_0 = -2 h/c (theorie des profils minces, Glauert 1926)
+PRANDTL_LOSS_MIN = 0.05  # - - plancher du facteur de perte de Prandtl, evite la division par zero en bout de pale
+FROUDE_MIN_SPEED = 0.10  # m/s - vitesse d'avance sous laquelle le rendement de Froude n'est pas defini
+SPEED_OF_SOUND_AIR = 340.3  # m/s - celerite du son dans l'air standard a 15 C (atmosphere OACI)
+RHO_AIR = 1.225  # kg/m3 - masse volumique de l'air standard au niveau de la mer (atmosphere OACI)
+TIP_MACH_WARN = 0.78  # - - nombre de Mach en bout de pale au-dela duquel la compressibilite degrade la portance
+PROPULSION_SPEED_MAX = 350.0  # m/s - vitesse d'avance au-dela de laquelle l'entree releve de la faute de frappe (transsonique dans l'air, impossible en eau)
+ADVANCE_SWEEP_POINTS = 41  # points du balayage du parametre d'avance J
+ADVANCE_SWEEP_MARGIN = 1.20  # - - borne haute du balayage, en fraction du J de poussee nulle
+
+# ---------------------------------------------------------------------------
 # Domaine des entrees : bornes au-dela desquelles les modeles ne valent plus
 # ---------------------------------------------------------------------------
 RPM_MAX = 100000.0  # tr/min - regime au-dela duquel l'entree releve de la faute de frappe, pas de la pompe
@@ -236,6 +264,7 @@ PLOT_BAND_PLEIN = 0.85  # - - position d'affichage du seuil F_SOLIDE sur l'echel
 # Conversions d'unites, pour la presentation seule (les calculs restent en SI)
 # ---------------------------------------------------------------------------
 SECONDS_PER_HOUR = 3600.0  # s/h - conversion m3/s -> m3/h des tableaux et des courbes
+SECONDS_PER_MINUTE = 60.0  # s/min - conversion tr/min -> tr/s
 MM_PER_M = 1000.0  # mm/m - conversion des longueurs pour l'affichage
 CM3_PER_M3 = 1.0e6  # cm3/m3 - conversion du volume pour le rapport d'import
 W_PER_KW = 1000.0  # W/kW - conversion des puissances pour l'affichage

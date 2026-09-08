@@ -463,6 +463,84 @@ Deux précisions de moindre portée :
   et non en pour-cent : 2 % n'a pas de sens sur un angle qui varie fortement le
   long de la pale.
 
+## En hélice libre : poussée, et le plafond qui juge le rendement
+
+Les phases 5 et 6 traitent la roue en **pompe** : carénée, refoulant dans une
+volute, jugée sur une hauteur et un débit. La même pièce axiale peut tourner en
+**hélice libre** — bateau, drone, banc d'essai — et la question devient alors une
+poussée et un rendement propulsif. Deux régimes distincts, pas deux façons de
+regarder le même :
+
+```bash
+python -m impeller_analyzer helice.stl --rotation horaire --rpm 1450 \
+    --vitesse-avance 3.0 --fluide eau
+```
+
+Sans `--vitesse-avance`, rien n'est calculé. Sur une roue centrifuge ou mixte, le
+module **refuse de répondre** et dit pourquoi : son modèle suppose un disque non
+caréné traversé axialement.
+
+### Le rendement ne se juge pas dans l'absolu
+
+C'est l'idée reprise d'un simulateur d'hélice tiers, et la seule qui méritait de
+l'être : un rendement propulsif ne veut rien dire seul, il se juge contre le
+maximum que la conservation de la quantité de mouvement autorise **pour cette
+poussée-là** — le disque actif idéal de Froude, pertes de profil, de bout de pale
+et de giration toutes mises à zéro.
+
+| | Valeur |
+|---|---|
+| Rendement propulsif calculé | 58.4 % |
+| **Plafond idéal (Froude)** | **78.2 %** |
+| Écart au plafond | 19.8 points |
+
+L'écart dit ce qu'un meilleur dessin de pale peut reprendre, et rien de plus.
+Aucune hélice ne franchit ce plafond : si le calcul le dépasse, c'est une erreur
+de programme, et l'analyse le déclare comme telle plutôt que d'imprimer le
+chiffre.
+
+### La géométrie remplace les curseurs
+
+Le modèle est un bilan **par élément de pale et quantité de mouvement** (BEM).
+Là où un simulateur d'hélice demande à l'utilisateur de taper un coefficient de
+portance de dessin et une traînée de profil qu'il ne connaît pas, ici :
+
+- le **calage** vient de β mesuré coupe par coupe ;
+- la **corde** et l'**épaisseur relative** sont lues sur les profils extraits ;
+- l'**angle de portance nulle** sort de la flèche de la ligne de cambrure
+  mesurée (`α₀ = −2 h/c`, théorie des profils minces), et c'est lui qui fait
+  qu'un profil cambré porte déjà à incidence nulle.
+
+Il reste deux entrées non géométriques — la pente de portance et la traînée de
+base d'un profil lisse — toutes deux dans `config.py` avec leur source.
+
+### Comment il est vérifié
+
+Aucune courbe d'essai n'étant disponible hors ligne, les tests vérifient les
+**invariants** plutôt qu'un chiffre absolu :
+
+- **le plafond n'est jamais franchi**, sur toute la courbe ;
+- **traînée de profil mise à zéro, l'écart au plafond se referme** de 25 à
+  17 points — sans s'annuler, puisque la giration et le bout de pale subsistent.
+  Un modèle dont l'écart ne bougerait pas ne ferait pas passer la traînée par où
+  il faut ;
+- la poussée part d'un maximum à l'arrêt, décroît, change de signe : la signature
+  d'une hélice à pas fixe, qui freine au-delà de son avance de poussée nulle ;
+- **CT et CP sont invariants par le régime** à J égal, à 10⁻⁶ près.
+
+Le bilan est résolu par **bissection sur l'angle d'écoulement** et non par point
+fixe sur les vitesses induites : le résidu change de signe une fois sur (0, π/2)
+et la bissection ne diverge jamais, là où le point fixe oscille dès que la
+solidité dépasse quelques dixièmes — ce qui est le cas de toute roue de pompe
+axiale. Cette forme du résidu vaut aussi **à l'arrêt**, où elle se réduit à
+`sin²φ = σ·Cn/(4F)` : la poussée statique sort du même calcul, sans formule
+empirique séparée.
+
+Ce que le modèle ne sait pas : les pertes d'interaction entre pales, le nombre de
+Reynolds, la compressibilité (signalée au-delà de Mach 0.78 en bout de pale), et
+l'état de sillage turbulent au-delà d'un facteur d'induction de 0.4 — signalé
+lui aussi, station par station.
+
 ## Audit : ce qu'une relecture complète de l'outil a corrigé
 
 ### Ce que le banc d'audit a trouvé
@@ -624,8 +702,9 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-223 tests : une phase par module, plus le banc d'audit qui balaie des roues
-entières et confronte chaque grandeur relue au dessin. Ils passent aussi sous
+238 tests : une phase par module, le banc d'audit qui balaie des roues entières
+et confronte chaque grandeur relue au dessin, et les invariants de l'analyse en
+hélice libre. Ils passent aussi sous
 `pytest` si vous l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture

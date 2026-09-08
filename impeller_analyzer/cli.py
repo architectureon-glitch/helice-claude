@@ -65,6 +65,20 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="regimes analyses, en tr/min (defaut : %(default)s)",
     )
+    parser.add_argument(
+        "--vitesse-avance",
+        type=float,
+        default=None,
+        metavar="M_S",
+        help="analyse la piece en helice libre a cette vitesse d'avance, en m/s "
+             "(poussee, rendement propulsif et plafond de Froude) ; roues axiales seulement",
+    )
+    parser.add_argument(
+        "--fluide",
+        choices=["eau", "air"],
+        default="eau",
+        help="fluide de l'analyse en helice libre (defaut : %(default)s)",
+    )
     parser.add_argument("--blades", type=int, default=None, help="nombre de pales impose")
     parser.add_argument("--beta1", type=float, default=None, metavar="DEG", help="angle de pale d'entree impose")
     parser.add_argument("--beta2", type=float, default=None, metavar="DEG", help="angle de pale de sortie impose")
@@ -135,6 +149,8 @@ def options_from_args(args: argparse.Namespace) -> Options:
         beta2_deg=args.beta2,
         suction=args.aspiration,
         rotation=blade_angles.rotation_sign_from_name(args.rotation),
+        propulsion_speed=args.vitesse_avance,
+        fluid=args.fluide,
         altitude=args.altitude,
         temperature_c=args.temperature,
         suction_height=args.hauteur_aspiration,

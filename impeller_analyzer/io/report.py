@@ -295,6 +295,59 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
         )
         lines.append("")
 
+    propulsion = result.propulsion
+    if propulsion is not None and propulsion.point is not None:
+        point = propulsion.point
+        lines.append("## En helice libre")
+        lines.append("")
+        lines.append(
+            f"La meme piece tournant **non carenee** dans de l'{propulsion.fluid} a "
+            f"{propulsion.rpm:.0f} tr/min, avancant a {point.speed:.1f} m/s "
+            f"({point.speed * 3.6:.0f} km/h). Ce n'est pas le regime de pompe des tableaux "
+            "ci-dessus : une pompe refoule dans une volute, une helice pousse dans un fluide "
+            "libre. Poussee et rendement propulsif viennent d'un bilan par element de pale, "
+            "dont le calage, la corde, la cambrure et l'epaisseur sont **lus sur la piece**."
+        )
+        lines.append("")
+        lines.extend(_markdown_table(
+            ["Grandeur", "Valeur"],
+            [
+                ["Parametre d'avance J", f"{point.advance_ratio:.3f}"],
+                ["Poussee (N)", f"{point.thrust:.0f}"],
+                ["Puissance absorbee (kW)", f"{point.power / config.W_PER_KW:.2f}"],
+                ["Couple (N.m)", f"{point.torque:.1f}"],
+                ["CT", f"{point.thrust_coefficient:.4f}"],
+                ["CP", f"{point.power_coefficient:.4f}"],
+                ["Vitesse en bout de pale (m/s)", f"{point.tip_speed:.1f}"],
+            ] + ([["Mach en bout de pale", f"{point.tip_mach:.2f}"]] if point.tip_mach else []),
+        ))
+        lines.append("")
+        lines.append("### Le rendement, et son plafond")
+        lines.append("")
+        lines.append(
+            "Un rendement propulsif ne se juge pas dans l'absolu : il se juge contre le maximum "
+            "que la conservation de la quantite de mouvement autorise pour **cette poussee-la**. "
+            "C'est le disque actif ideal de Froude, pertes de profil, de bout de pale et de "
+            "giration toutes mises a zero. Aucune helice ne peut le depasser ; l'ecart dit ce "
+            "qu'il reste a gagner par le dessin, et rien de plus."
+        )
+        lines.append("")
+        lines.extend(_markdown_table(
+            ["", "Valeur"],
+            [
+                ["Rendement propulsif calcule", f"{point.efficiency * 100.0:.1f} %"],
+                ["**Plafond ideal (Froude)**", f"**{point.froude_efficiency * 100.0:.1f} %**"],
+                ["Ecart au plafond", f"{point.ceiling_gap() * 100.0:.1f} points"],
+            ],
+        ))
+        lines.append("")
+        for note in propulsion.notes:
+            lines.append(f"> {note}")
+            lines.append(">")
+        if propulsion.notes:
+            lines.pop()
+        lines.append("")
+
     if result.blades is not None and result.blades.notes:
         lines.append("## Remarques sur les aubes et le sens de rotation")
         lines.append("")

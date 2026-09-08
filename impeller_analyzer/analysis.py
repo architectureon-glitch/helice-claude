@@ -24,6 +24,7 @@ from .hydraulics import cavitation as cavitation_module
 from .hydraulics import energy as energy_module
 from .hydraulics import losses as losses_module
 from .hydraulics import meanline as meanline_module
+from .hydraulics import propulsion as propulsion_module
 from .hydraulics import similarity as similarity_module
 from .io import loader
 from .mesh import TriMesh
@@ -40,6 +41,8 @@ class Options:
     beta1_deg: float | None = None
     beta2_deg: float | None = None
     rotation: int | None = None  # +1 anti-horaire, -1 horaire, None : a indiquer
+    propulsion_speed: float | None = None  # m/s - vitesse d'avance en helice libre ; None : pas d'analyse propulsive
+    fluid: str = "eau"  # fluide de l'analyse propulsive : "eau" ou "air"
     altitude: float = config.ALTITUDE
     temperature_c: float = config.TEMPERATURE
     suction_height: float = config.HAUTEUR_ASPIRATION
@@ -105,6 +108,16 @@ class Options:
                 f"utilise pour la pression barometrique vaut de 0 a "
                 f"{config.ALTITUDE_MAX:g} m."
             )
+        if self.propulsion_speed is not None and not 0.0 <= self.propulsion_speed <= config.PROPULSION_SPEED_MAX:
+            raise ValueError(
+                f"vitesse d'avance hors domaine : {self.propulsion_speed:g} m/s. Attendu entre 0 "
+                f"et {config.PROPULSION_SPEED_MAX:g} m/s."
+            )
+        if self.fluid not in propulsion_module.FLUIDS:
+            raise ValueError(
+                f"fluide inconnu : '{self.fluid}'. Attendu : "
+                f"{', '.join(sorted(propulsion_module.FLUIDS))}."
+            )
         if self.r_aspiration_cm is not None and self.r_aspiration_cm <= 0.0:
             raise ValueError(
                 f"rayon d'aspiration impose invalide : {self.r_aspiration_cm:g} cm. Il doit "
@@ -121,6 +134,8 @@ class Options:
             "beta1_impose_deg": self.beta1_deg,
             "beta2_impose_deg": self.beta2_deg,
             "sens_de_rotation_impose": self.rotation,
+            "vitesse_d_avance_m_s": self.propulsion_speed,
+            "fluide": self.fluid,
             "cote_aspiration": self.suction,
             "altitude_m": self.altitude,
             "temperature_C": self.temperature_c,
@@ -145,6 +160,7 @@ class AnalysisResult:
     blades: blade_module.BladeGeometry | None = None
     blade_loops: loops_module.LoopResult | None = None
     blade_normals: normals_module.NormalAngles | None = None
+    propulsion: propulsion_module.PropulsionResult | None = None
     meanline_input: meanline_module.MeanlineInput | None = None
     curves: list[meanline_module.PerformanceCurve] = field(default_factory=list)
     head_sensitivity: float = 0.0  # ecart relatif de hauteur pour +/- 1 deg sur beta2
@@ -181,6 +197,7 @@ class AnalysisResult:
             ),
             "forme_des_aubes": self.blade_loops.to_dict() if self.blade_loops else None,
             "angles_par_normales": self.blade_normals.to_dict() if self.blade_normals else None,
+            "propulsion": self.propulsion.to_dict() if self.propulsion else None,
             "pales": self.blades.to_dict() if self.blades else None,
             "sens_de_sortie_du_liquide": self.discharge,
             "installation": self.installation.to_dict() if self.installation else None,
@@ -494,6 +511,20 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
                 "varie tres vite. Hauteur et puissance sont a lire comme des ordres de grandeur ; "
                 "le debit et le NPSHr, qui n'en dependent pas de la meme facon, restent fiables."
             )
+
+    # Phase propulsive, sur demande. Elle ne remplace pas l'analyse de pompe :
+    # elle repond a une autre question -- la meme piece tournant en helice libre,
+    # non carenee -- et le module refuse de repondre si la roue n'est pas axiale.
+    if options.propulsion_speed is not None:
+        result.propulsion = propulsion_module.analyse(
+            topology,
+            geometry,
+            rpm=max(options.speeds) if options.speeds else 0.0,
+            speed=options.propulsion_speed,
+            fluid=options.fluid,
+        )
+        result.warnings.extend(result.propulsion.warnings)
+        result.confidence.set("propulsion", result.propulsion.confidence)
 
     result.elapsed_s = time.time() - started
     return result
