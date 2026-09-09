@@ -463,6 +463,74 @@ Deux précisions de moindre portée :
   et non en pour-cent : 2 % n'a pas de sens sur un angle qui varie fortement le
   long de la pale.
 
+## Les sorties visuelles : un instrument, pas un document
+
+Ce n'est pas un rapport imprimé. On tourne un bouton, une aiguille bouge, une
+limite s'allume.
+
+### La carte d'occupation est l'élément principal
+
+Elle est le premier élément de la page, en grand, et **interrogeable** : au
+survol on lit `r`, `z` et la fraction angulaire occupée. L'image seule donne une
+impression ; la grille se lit. Elle est embarquée quantifiée sur un octet par
+cellule — une grille 200×200 tient en 53 Ko, dix fois moins qu'en JSON.
+
+Surimpressions commutables : axe, `r1h` `r1s` `r2`, plans d'entrée et de sortie
+avec le sens débitant, et — quand une topologie en boucle est détectée — **les
+deux brins et le rayon de fusion**, puisque c'est ce qui invalide la lecture par
+la cambrure. Sur la pièce d'essai réelle, la carte *montre* la boucle : les deux
+branches se séparent puis se rejoignent.
+
+### Les deux manipulations
+
+Aucune ne réimplémente le modèle. Un second modèle en JavaScript aurait été libre
+de diverger du Python — exactement l'incohérence que cet outil passe son temps à
+retirer.
+
+- **Régime** : les lois de similitude, que le contrôle du rapport vérifie déjà à
+  0,00 %. Mesuré dans un vrai navigateur : ×2 sur le régime donne **Q ×2, H ×4,
+  P ×8, couple ×4**. C'est le modèle lui-même. La borne du curseur va au-delà de
+  la vitesse limite pour que le franchissement soit **atteignable** : un curseur
+  qui s'arrête avant la réponse ne pose pas la question.
+- **β2 ± 1°** : trois courbes réellement calculées en Python, la page interpole
+  entre elles. L'avertissement du rapport devient manipulable.
+
+### Une seule source de palette
+
+```
+#FBFBFA fond   #16232B encre   #DDE3E0 grille
+#1D6F6A teal   → MESURÉ        #5B4B8A violet → DÉCLARÉ    #9B1D20 rouge → LIMITE
+```
+
+`io/style.py` sert la page **et** les deux figures. Une page claire à côté de
+figures restées aux réglages d'origine donne un résultat incohérent, et c'est le
+défaut qu'on oublie le plus souvent.
+
+La couleur ne porte jamais seule : mesuré en graisse 600, déclaré avec un filet
+violet, défaut en italique atténué, confiance faible avec un filet rouge **et**
+la valeur entre parenthèses.
+
+L'échelle de la carte est séquentielle à teinte unique, du fond au teal, à
+luminance monotone (vérifié par test). Ni viridis ni jet : une échelle
+multicolore fabrique des frontières que les données n'ont pas. Les régimes
+suivent la même logique — une seule teinte éclaircie, parce que la vitesse est
+une grandeur *ordonnée* et non des catégories.
+
+### Deux défauts trouvés en chemin
+
+**La page chargeait IBM Plex depuis Google Fonts.** Elle affirmait son autonomie
+et ne l'avait pas : hors ligne — c'est-à-dire sur le poste d'atelier où elle sert
+— elle dégradait en silence. Un test *affirmait* même cette dépendance. Piles
+système désormais, et **zéro ressource externe**, ce que le test vérifie.
+
+**Le moteur de rendu des figures n'avait pas de bas de casse.** Tout le texte
+des PNG remontait en capitales, ce qu'un libellé ne doit pas être. Vingt-six
+glyphes ajoutés à la fonte 5×7 — avec la hauteur d'x commençant à la même ligne
+pour toutes, jambages compris : démarrer `p` une ligne plus haut lui donne la
+taille d'une capitale, et « disponible » se lit « disPonible ».
+
+Le thème sombre reste disponible en bascule ; il cesse d'être le défaut.
+
 ## Import par composants déclarés
 
 Le mode d'import global reste disponible, inchangé. Celui-ci s'ajoute à côté, et
@@ -860,10 +928,11 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-279 tests : une phase par module, le banc d'audit qui balaie des roues entières
+296 tests : une phase par module, le banc d'audit qui balaie des roues entières
 et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
-hélice libre, ce que l'outil a le droit d'affirmer, et l'import par composants
-déclarés avec ses six contrôles. Ils passent aussi sous
+hélice libre, ce que l'outil a le droit d'affirmer, l'import par composants
+déclarés avec ses six contrôles, et les sorties visuelles — palette unique,
+autonomie de la page, recalcul des deux curseurs. Ils passent aussi sous
 `pytest` si vous l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture

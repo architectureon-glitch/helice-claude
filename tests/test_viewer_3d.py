@@ -107,11 +107,15 @@ class TestPage(ViewerTestCase):
         self.assertIn("<title>Roue centrifuge a 6 pales</title>", page)
         self.assertIn('<canvas id="gl">', page)
         self.assertIn("webgl2", page)
-        # Une seule ressource externe, la fonte, et aucun script distant.
+        # Plus aucune ressource externe. La page chargeait la fonte IBM Plex
+        # depuis Google Fonts, ce qui contredisait sa propre garantie
+        # d'autonomie et degradait en silence des que le reseau manquait --
+        # c'est-a-dire sur le poste d'atelier ou elle sert. Les piles de polices
+        # systeme l'ont remplacee.
         self.assertEqual(page.count("<script"), 1)
         self.assertNotIn("<script src", page)
-        self.assertEqual(len(re.findall(r'href="https?://', page)), 1)
-        self.assertIn("fonts.googleapis.com", page)
+        self.assertEqual(len(re.findall(r'(?:href|src)="https?://', page)), 0)
+        self.assertNotIn("fonts.googleapis.com", page)
 
     def test_page_pour_artefact(self):
         """La variante sans enveloppe garde son titre et n'a ni html ni body."""
@@ -151,10 +155,17 @@ class TestPage(ViewerTestCase):
     def test_theme_clair_et_sombre(self):
         """Les trois etats de theme sont couverts par des jetons de couleur."""
         page = viewer.build_page(self.result)
-        self.assertIn("@media (prefers-color-scheme: dark)", page)
-        self.assertIn(':root:not([data-theme="light"])', page)
-        self.assertIn(':root[data-theme="dark"]', page)
+        # Le theme clair est desormais le defaut, et le sombre une bascule
+        # explicite : la page ne suit plus la preference du systeme.
+        self.assertIn('[data-theme="sombre"]', page)
+        self.assertIn('id="bascule-theme"', page)
         self.assertIn("background:var(--paper)", page)
+        # La palette vient du style partage avec les figures, pas de valeurs
+        # recopiees : une page claire et des figures restees aux reglages
+        # d'origine donneraient un resultat incoherent.
+        for couleur in (config.COULEUR_FOND, config.COULEUR_MESURE,
+                        config.COULEUR_DECLARE, config.COULEUR_LIMITE):
+            self.assertIn(couleur, page)
 
 
 if __name__ == "__main__":  # pragma: no cover

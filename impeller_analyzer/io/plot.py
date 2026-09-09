@@ -19,23 +19,29 @@ import zlib
 from typing import Sequence
 
 from .. import config
+from . import style
 
 Color = tuple[int, int, int]
 
-WHITE: Color = (255, 255, 255)
-BLACK: Color = (20, 20, 20)
-GREY: Color = (140, 140, 140)
-LIGHT: Color = (225, 225, 225)
+# La palette vient de `style`, partagee avec la page : une page claire et des
+# figures restees aux reglages d'origine donnent un resultat incoherent, et
+# c'est le defaut qu'on oublie le plus souvent.
+WHITE: Color = style.FOND
+BLACK: Color = style.ENCRE
+GREY: Color = style.GRILLE
+LIGHT: Color = style.GRILLE
 
-#: Palette des regimes (une couleur par vitesse de rotation).
-SERIES_COLORS: tuple[Color, ...] = (
-    (31, 119, 180),   # bleu
-    (214, 39, 40),    # rouge
-    (44, 160, 44),    # vert
-    (255, 127, 14),   # orange
-    (148, 103, 189),  # violet
-    (140, 86, 75),    # brun
-)
+#: Regimes : une seule teinte, celle du mesure, eclaircie du plus lent au plus
+#: rapide. Six couleurs categorielles pour une grandeur **ordonnee** feraient
+#: lire des familles la ou il n'y a qu'une progression de vitesse.
+def series_color(index: int, total: int) -> Color:
+    """Teinte du `index`-ieme regime, du plus clair au plus fonce."""
+    if total <= 1:
+        return style.MESURE_RGB
+    return style.sequential(0.42 + 0.58 * index / (total - 1))
+
+
+SERIES_COLORS: tuple[Color, ...] = tuple(series_color(i, 6) for i in range(6))
 
 #: Fonte 5x7, colonnes de gauche a droite, bit 0 = ligne du haut.
 _FONT: dict[str, tuple[int, int, int, int, int]] = {
@@ -77,6 +83,52 @@ _FONT: dict[str, tuple[int, int, int, int, int]] = {
 
 CHAR_WIDTH = 6  # 5 colonnes de glyphe + 1 d'espacement
 CHAR_HEIGHT = 7
+
+#: Bas de casse, en lignes lisibles plutot qu'en masques binaires.
+#:
+#: La fonte d'origine n'avait que des capitales, et `_ascii` remontait donc tout
+#: le texte des figures en majuscules.  Un titre de figure en capitales est
+#: exactement ce qu'un libelle ne doit pas etre : il se lit moins vite, et il
+#: crie.  Sept lignes de cinq colonnes, `#` pour un pixel allume.
+_MINUSCULES = {
+    "a": (".....", ".....", ".###.", "....#", ".####", "#...#", ".####"),
+    "b": ("#....", "#....", "####.", "#...#", "#...#", "#...#", "####."),
+    "c": (".....", ".....", ".####", "#....", "#....", "#....", ".####"),
+    "d": ("....#", "....#", ".####", "#...#", "#...#", "#...#", ".####"),
+    "e": (".....", ".....", ".###.", "#...#", "#####", "#....", ".####"),
+    "f": ("..##.", ".#..#", ".#...", "###..", ".#...", ".#...", ".#..."),
+    "g": (".....", ".....", ".####", "#...#", ".####", "....#", ".###."),
+    "h": ("#....", "#....", "####.", "#...#", "#...#", "#...#", "#...#"),
+    "i": ("..#..", ".....", ".##..", "..#..", "..#..", "..#..", ".###."),
+    "j": ("...#.", ".....", "..##.", "...#.", "...#.", "#..#.", ".##.."),
+    "k": ("#....", "#....", "#..#.", "#.#..", "##...", "#.#..", "#..#."),
+    "l": (".##..", "..#..", "..#..", "..#..", "..#..", "..#..", ".###."),
+    "m": (".....", ".....", "##.#.", "#.#.#", "#.#.#", "#...#", "#...#"),
+    "n": (".....", ".....", "####.", "#...#", "#...#", "#...#", "#...#"),
+    "o": (".....", ".....", ".###.", "#...#", "#...#", "#...#", ".###."),
+    "p": (".....", ".....", "####.", "#...#", "####.", "#....", "#...."),
+    "q": (".....", ".....", ".####", "#...#", ".####", "....#", "....#"),
+    "r": (".....", ".....", "#.##.", "##..#", "#....", "#....", "#...."),
+    "s": (".....", ".....", ".####", "#....", ".###.", "....#", "####."),
+    "t": ("..#..", "..#..", "#####", "..#..", "..#..", "..#.#", "...#."),
+    "u": (".....", ".....", "#...#", "#...#", "#...#", "#..##", ".##.#"),
+    "v": (".....", ".....", "#...#", "#...#", "#...#", ".#.#.", "..#.."),
+    "w": (".....", ".....", "#...#", "#...#", "#.#.#", "#.#.#", ".#.#."),
+    "x": (".....", ".....", "#...#", ".#.#.", "..#..", ".#.#.", "#...#"),
+    "y": (".....", ".....", "#...#", "#...#", ".####", "....#", ".###."),
+    "z": (".....", ".....", "#####", "...#.", "..#..", ".#...", "#####"),
+}
+
+
+def _colonnes(lignes: tuple[str, ...]) -> tuple[int, int, int, int, int]:
+    """Convertit sept lignes de cinq caracteres en cinq masques de colonne."""
+    return tuple(  # type: ignore[return-value]
+        sum(1 << rang for rang, ligne in enumerate(lignes) if ligne[colonne] == "#")
+        for colonne in range(5)
+    )
+
+
+_FONT.update({char: _colonnes(lignes) for char, lignes in _MINUSCULES.items()})
 
 
 def _ascii(text: str) -> str:
@@ -204,20 +256,15 @@ class Canvas:
 # Palettes
 # ---------------------------------------------------------------------------
 def viridis_like(t: float) -> Color:
-    """Palette continue sombre -> claire, lisible en niveaux de gris.
+    """Echelle de la carte d'occupation : teinte unique, du fond au teal.
 
-    Interpolation lineaire entre cinq points de controle proches de `viridis`.
+    Le nom est reste pour ne pas casser les appels ; la rampe, elle, a change.
+    Une echelle multicolore fabrique des frontieres que les donnees n'ont pas --
+    reproche de fond fait a jet, et vrai plus discretement de viridis sur une
+    grandeur sans seuil naturel. `f` est une fraction qui va de zero a un : une
+    progression, pas des categories.
     """
-    stops = ((0.0, (68, 1, 84)), (0.25, (59, 82, 139)), (0.5, (33, 145, 140)),
-             (0.75, (94, 201, 98)), (1.0, (253, 231, 37)))
-    t = max(0.0, min(1.0, t))
-    for index in range(len(stops) - 1):
-        t0, c0 = stops[index]
-        t1, c1 = stops[index + 1]
-        if t <= t1:
-            ratio = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
-            return tuple(int(round(c0[k] + ratio * (c1[k] - c0[k]))) for k in range(3))  # type: ignore[return-value]
-    return stops[-1][1]  # type: ignore[return-value]
+    return style.sequential(t)
 
 
 def occupancy_scale(value: float) -> float:

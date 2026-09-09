@@ -273,6 +273,22 @@ SERVER_HOST = "127.0.0.1"  # adresse d'ecoute par defaut : la machine locale seu
 SERVER_PORT = 8765  # port d'ecoute par defaut
 SERVER_MAX_UPLOAD = 250 * 1024 * 1024  # octets - taille maximale d'un fichier depose
 SERVER_HISTORY = 8  # analyses conservees sur disque pour le telechargement des rapports
+# ---------------------------------------------------------------------------
+# Palette et typographie des sorties visuelles (une seule source, C6)
+# ---------------------------------------------------------------------------
+# Teal et violet ne sont pas decoratifs : ils codent mesure contre declare, et
+# la convention tient partout, page comme figures.
+RPM_SLIDER_MARGIN = 1.15  # - - marge au-dela de la vitesse limite couverte par le curseur de regime, pour que le franchissement soit atteignable
+COULEUR_FOND = "#FBFBFA"  # fond de page et de figure
+COULEUR_ENCRE = "#16232B"  # texte, axes, trace neutre
+COULEUR_GRILLE = "#DDE3E0"  # filets de tableau, grille des graphiques
+COULEUR_MESURE = "#1D6F6A"  # teal - grandeur mesuree, trace principal
+COULEUR_DECLARE = "#5B4B8A"  # violet - grandeur declaree ou imposee
+COULEUR_LIMITE = "#9B1D20"  # rouge - cavitation, confiance faible, franchissement
+COULEUR_FOND_SOMBRE = "#12181C"  # fond du theme sombre, en bascule
+COULEUR_ENCRE_SOMBRE = "#E8EDEA"  # encre du theme sombre
+COULEUR_GRILLE_SOMBRE = "#2A353B"  # filets du theme sombre
+
 PLOT_BAND_VIDE = 0.15  # - - position d'affichage du seuil F_VIDE sur l'echelle de couleur
 PLOT_BAND_PLEIN = 0.85  # - - position d'affichage du seuil F_SOLIDE sur l'echelle de couleur
 

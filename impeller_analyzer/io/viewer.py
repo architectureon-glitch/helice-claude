@@ -21,6 +21,7 @@ import struct
 
 from .. import config
 from ..geometry.occupancy import OccupancyMap
+from . import style
 from ..mesh import TriMesh, cross, normalize, sub
 from . import plot
 
@@ -257,6 +258,136 @@ def build_payload(result, mesh: TriMesh | None = None) -> dict:
         "tables": _rows(result),
         "avertissements": list(result.warnings),
         "carte": _occupancy_data_uri(result),
+        "grille": occupancy_grid(result),
+        "vif": live_curves(result),
+        "provenance": dict(result.provenance),
+    }
+
+
+def occupancy_grid(result) -> dict:
+    """La carte `f(r, z)` elle-meme, et les reperes qu'on peut y superposer.
+
+    L'image seule ne permet pas de lire une valeur : elle donne une impression.
+    La grille, elle, se survole -- on pointe et on lit `r`, `z` et la fraction
+    angulaire occupee.  C'est la lecture dont tout le reste decoule, elle merite
+    d'etre interrogeable et pas seulement regardable.
+
+    `f` est quantifiee sur un octet et transmise en base64 : une grille 200x200
+    tient en 53 ko, la ou le meme tableau en JSON en ferait dix fois plus.
+    """
+    occupancy = result.occupancy
+    if occupancy is None:
+        return {}
+    topology = result.topology
+    loops = result.blade_loops
+    valeurs = bytearray()
+    for row in occupancy.f:
+        for value in row:
+            valeurs.append(max(0, min(255, round(value * 255.0))))
+
+    reperes = {}
+    if topology is not None:
+        reperes = {
+            "r1h": topology.r_1h * config.MM_PER_M,
+            "r1s": topology.r_1s * config.MM_PER_M,
+            "r2": topology.r_2 * config.MM_PER_M,
+            "z1": topology.z_1 * config.MM_PER_M,
+            "z2": topology.z_2 * config.MM_PER_M,
+        }
+    if loops is not None and loops.looped:
+        reperes["boucle"] = {
+            "r_interieur": loops.r_inner * config.MM_PER_M,
+            "r_exterieur": loops.r_outer * config.MM_PER_M,
+            "r_fusion": (loops.merge_radius * config.MM_PER_M) or None,
+        }
+    return {
+        "nr": occupancy.nr,
+        "nz": occupancy.nz,
+        "r": [v * config.MM_PER_M for v in occupancy.r_centres],
+        "z": [v * config.MM_PER_M for v in occupancy.z_centres],
+        "f": base64.b64encode(bytes(valeurs)).decode("ascii"),
+        "seuils": {"vide": config.F_VIDE, "matiere": config.F_MATIERE,
+                   "solide": config.F_SOLIDE},
+        "reperes": reperes,
+        # Le sens debitant sur l'axe : +1 si le fluide va vers +Z, -1 sinon.
+        "sens_debitant": -1,
+    }
+
+
+def live_curves(result) -> dict:
+    """Ce qu'il faut pour deplacer les deux curseurs sans relancer l'analyse.
+
+    Deux mecanismes differents, et il importe de ne pas les confondre :
+
+    * le **regime** se deplace par les lois de similitude, que l'outil verifie
+      deja a 0.00 % -- `Q` comme `n`, `H` comme `n^2`, `P` comme `n^3`, `NPSHr`
+      comme `n^2`. C'est le meme modele, pas une approximation ;
+    * **beta2** ne s'extrapole pas : les courbes sont **precalculees** en Python
+      a `beta2 - 1`, `beta2` et `beta2 + 1` degre, et la page interpole entre
+      trois courbes reelles.
+
+    Reimplementer le modele de ligne moyenne en JavaScript aurait donne un
+    second modele, libre de diverger du premier -- exactement l'incoherence que
+    cet outil passe son temps a retirer.
+    """
+    import dataclasses
+
+    from ..hydraulics import cavitation as cavitation_module
+    from ..hydraulics import meanline as meanline_module
+
+    if not result.curves or result.topology is None or result.blades is None:
+        return {}
+    reference = result.curves[0]
+    point = reference.best_efficiency_point()
+    if point is None:
+        return {}
+
+    limite = result.speed_limit
+    data = meanline_module.MeanlineInput.from_geometry(result.topology, result.blades)
+    familles = []
+    for delta in (-config.BETA_SENSITIVITY_DEG, 0.0, config.BETA_SENSITIVITY_DEG):
+        beta2 = data.beta2_deg + delta
+        if not 0.0 < beta2 < 90.0:
+            continue
+        courbe = meanline_module.build_curve(
+            dataclasses.replace(data, beta2_deg=beta2), reference.rpm
+        )
+        cavitation_module.apply_to_curve(courbe)
+        familles.append({
+            "beta2": beta2,
+            "ecart": delta,
+            "Q": [p.flow * config.SECONDS_PER_HOUR for p in courbe.points],
+            "H": [p.head for p in courbe.points],
+            "rendement": [p.efficiency * 100.0 for p in courbe.points],
+            "npshr": [p.npshr for p in courbe.points],
+        })
+    return {
+        "rpm_reference": reference.rpm,
+        "rpm_min": min(config.DEFAULT_RPM),
+        # La borne haute doit permettre d'atteindre la limite de cavitation :
+        # c'est la question que l'utilisateur se pose vraiment -- jusqu'ou
+        # puis-je monter -- et un curseur qui s'arrete avant la reponse ne la
+        # pose meme pas.
+        "rpm_max_affiche": max(
+            max(config.DEFAULT_RPM),
+            reference.rpm * 2.0,
+            (limite.rpm_max if limite else 0.0) * config.RPM_SLIDER_MARGIN,
+        ),
+        "rpm_limite": limite.rpm_max if limite else 0,
+        "limite_active": limite.active_limit if limite else "",
+        "npsh_disponible": result.installation.npsha if result.installation else 0.0,
+        "point": {
+            "Q": point.flow * config.SECONDS_PER_HOUR,
+            "H": point.head,
+            "P": point.shaft_power / config.W_PER_KW,
+            "couple": point.torque,
+            "npshr": point.npshr,
+            "rendement": point.efficiency * 100.0,
+        },
+        "familles": familles,
+        "beta2_provenance": (
+            "declare" if result.blades.forced_beta else "mesure"
+        ),
     }
 
 
@@ -282,10 +413,35 @@ def build_page(
     return _wrap(body, title, standalone)
 
 
+def _palette_css(page: str) -> str:
+    """Injecte la palette et les piles de polices du style partage.
+
+    Le gabarit porte des marques plutot que des valeurs : la page et les deux
+    figures tirent ainsi leurs couleurs du meme endroit, et une page claire ne
+    peut plus cotoyer des figures restees aux reglages d'origine.
+    """
+    remplacements = {
+        "__FOND__": config.COULEUR_FOND,
+        "__ENCRE__": config.COULEUR_ENCRE,
+        "__GRILLE__": config.COULEUR_GRILLE,
+        "__MESURE__": config.COULEUR_MESURE,
+        "__DECLARE__": config.COULEUR_DECLARE,
+        "__LIMITE__": config.COULEUR_LIMITE,
+        "__FOND_SOMBRE__": config.COULEUR_FOND_SOMBRE,
+        "__ENCRE_SOMBRE__": config.COULEUR_ENCRE_SOMBRE,
+        "__GRILLE_SOMBRE__": config.COULEUR_GRILLE_SOMBRE,
+        "__PILE_TEXTE__": style.PILE_TEXTE,
+        "__PILE_NOMBRES__": style.PILE_NOMBRES,
+    }
+    for marque, valeur in remplacements.items():
+        page = page.replace(marque, valeur)
+    return page
+
+
 def _fill(payload_json: str, server: bool) -> str:
     """Injecte la charge utile, le mode et le port par defaut dans le gabarit."""
     return (
-        _TEMPLATE.replace("__DONNEES__", payload_json)
+        _palette_css(_TEMPLATE).replace("__DONNEES__", payload_json)
         .replace("__SERVEUR__", "true" if server else "false")
         .replace("__PORT__", str(config.SERVER_PORT))
     )
@@ -298,7 +454,7 @@ def _wrap(body: str, title: str, standalone: bool) -> str:
     return (
         '<!doctype html>\n<html lang="fr">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        '<style>html,body{margin:0}img{max-width:100%}</style>\n'
+        '<style>html,body{margin:0; background:var(--fond); color:var(--encre)}img{max-width:100%}</style>\n'
         f"<title>{title}</title>\n</head>\n<body>\n" + body + "\n</body>\n</html>\n"
     )
 
@@ -326,39 +482,44 @@ def write_page(
 
 #: Page complete. `__DONNEES__` est remplace par la charge utile JSON.
 _TEMPLATE = r"""
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<!-- Aucune ressource externe : la page s'ouvre depuis le disque, hors ligne,
+     et rend la meme chose. Elle chargeait IBM Plex depuis Google Fonts, ce qui
+     contredisait cette garantie et degradait en silence des que le reseau
+     manquait -- c'est-a-dire sur le poste d'atelier ou elle sert. Les piles de
+     polices systeme la remplacent. -->
 <style>
+/* Palette : une seule source, partagee avec les figures (io/style.py). Teal et
+   violet ne decorent pas, ils codent mesure contre declare. Le theme clair est
+   le defaut ; le sombre reste en bascule. */
 :root{
-  --paper:#F5F3EF; --panel:#FFFFFF; --ink:#1B1D21; --ink-soft:#5F636B; --ink-faint:#8B9099;
-  --line:#E1DCD3; --line-strong:#CFC8BC;
-  --accent:#0E7C86; --accent-wash:#E4F0F1;
-  --oxide:#A9491A; --amber:#8F5E06; --steel:#6E747E;
-  --stage:#181B21; --stage-grid:#242932; --stage-ink:#C9CDD4;
-  --ok:#2F6E4F; --warn:#8A5A12; --erreur:#A32C1E;
+  --fond:__FOND__; --encre:__ENCRE__; --grille:__GRILLE__;
+  --mesure:__MESURE__; --declare:__DECLARE__; --limite:__LIMITE__;
+
+  --paper:var(--fond); --panel:var(--fond); --ink:var(--encre);
+  --ink-soft:color-mix(in srgb, var(--encre) 62%, var(--fond));
+  --ink-faint:color-mix(in srgb, var(--encre) 42%, var(--fond));
+  --line:var(--grille); --line-strong:color-mix(in srgb, var(--grille) 70%, var(--encre));
+  --accent:var(--mesure); --accent-wash:color-mix(in srgb, var(--mesure) 10%, var(--fond));
+  --oxide:var(--limite); --amber:var(--declare); --steel:var(--ink-faint);
+  --stage:color-mix(in srgb, var(--encre) 6%, var(--fond));
+  --stage-grid:var(--grille); --stage-ink:var(--encre);
+  --ok:var(--mesure); --warn:var(--declare); --erreur:var(--limite);
+  --pile-texte:__PILE_TEXTE__;
+  --pile-nombres:__PILE_NOMBRES__;
   --rail:22.5rem;
 }
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --paper:#0F1216; --panel:#171A20; --ink:#E8E5DF; --ink-soft:#A0A6AF; --ink-faint:#767D87;
-    --line:#252A33; --line-strong:#333944;
-    --accent:#45B8C2; --accent-wash:#10272B;
-    --oxide:#DE7F43; --amber:#E2AA36; --steel:#8B929C;
-    --ok:#5CB68A; --warn:#D9A441; --erreur:#E8705E;
-  }
+[data-theme="sombre"]{
+  --fond:__FOND_SOMBRE__; --encre:__ENCRE_SOMBRE__; --grille:__GRILLE_SOMBRE__;
+  --mesure:#5FBDB6; --declare:#A192D6; --limite:#E8705E;
+  --stage:color-mix(in srgb, var(--encre) 5%, var(--fond));
 }
-:root[data-theme="dark"]{
-  --paper:#0F1216; --panel:#171A20; --ink:#E8E5DF; --ink-soft:#A0A6AF; --ink-faint:#767D87;
-  --line:#252A33; --line-strong:#333944;
-  --accent:#45B8C2; --accent-wash:#10272B;
-  --oxide:#DE7F43; --amber:#E2AA36; --steel:#8B929C;
-  --ok:#5CB68A; --warn:#D9A441; --erreur:#E8705E;
-}
+
 
 *{box-sizing:border-box}
 body{margin:0}
 .app{
   height:100vh; overflow:hidden; background:var(--paper); color:var(--ink);
-  font-family:"IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family:var(--pile-texte);
   font-size:14px; line-height:1.5; display:flex; flex-direction:column;
 }
 @media (max-width:960px){ .app{height:auto; overflow:visible} }
@@ -374,7 +535,7 @@ body{margin:0}
   padding:.9rem 1.25rem; border-bottom:1px solid var(--line); background:var(--panel); flex:none;
 }
 .bar h1{margin:0; font-size:1.05rem; font-weight:600; letter-spacing:-.01em; text-wrap:balance}
-.bar .file{font-family:"IBM Plex Mono", ui-monospace, monospace; font-size:.78rem; color:var(--ink-soft)}
+.bar .file{font-family:var(--pile-nombres); font-size:.78rem; color:var(--ink-soft)}
 .verdicts{display:flex; flex-wrap:wrap; gap:.4rem .5rem; margin-left:auto}
 .chip{
   display:inline-flex; align-items:center; gap:.4rem; padding:.2rem .55rem;
@@ -385,7 +546,15 @@ body{margin:0}
 .chip .dot{width:.5rem; height:.5rem; border-radius:50%; flex:none}
 
 /* ---- corps ---- */
-main{flex:1; min-height:0; display:grid; grid-template-columns:1fr var(--rail)}
+/* La carte d'occupation est l'element principal : elle occupe toute la largeur,
+   au-dessus de la vue 3D et du rail. C'est la lecture dont tout le reste
+   decoule, elle ne se met pas dans un coin. */
+main{
+  flex:1; min-height:0; overflow-y:auto; display:grid;
+  grid-template-columns:1fr var(--rail); grid-template-rows:auto 1fr;
+}
+.instrument{grid-column:1 / -1}
+.stage{grid-row:2}
 @media (max-width:960px){ main{grid-template-columns:1fr} }
 
 /* ---- scene ---- */
@@ -440,7 +609,7 @@ main{flex:1; min-height:0; display:grid; grid-template-columns:1fr var(--rail)}
 .champ{display:grid; gap:.2rem}
 .champ label{font-size:.74rem; color:var(--ink-soft)}
 .champ input, .champ select{
-  font:inherit; font-size:.85rem; font-family:"IBM Plex Mono", ui-monospace, monospace;
+  font:inherit; font-size:.85rem; font-family:var(--pile-nombres);
   padding:.34rem .45rem; border:1px solid var(--line-strong); border-radius:2px;
   background:var(--paper); color:var(--ink); width:100%;
 }
@@ -462,7 +631,7 @@ details summary:focus-visible{outline:2px solid var(--accent); outline-offset:2p
 .hors-serveur p:last-child{margin-bottom:0}
 .hors-serveur strong{color:var(--ink)}
 .hors-serveur code{
-  display:inline-block; font-family:"IBM Plex Mono", ui-monospace, monospace; font-size:.8rem;
+  display:inline-block; font-family:var(--pile-nombres); font-size:.8rem;
   background:var(--panel); border:1px solid var(--line); border-radius:2px; padding:.15rem .4rem;
   color:var(--ink); overflow-wrap:anywhere;
 }
@@ -483,7 +652,7 @@ details summary:focus-visible{outline:2px solid var(--accent); outline-offset:2p
 .rail h2{margin:0; font-size:.95rem; font-weight:600; letter-spacing:-.005em}
 .rail .step{display:flex; align-items:baseline; gap:.5rem; margin:0 0 .7rem}
 .rail .step .n{
-  font-family:"IBM Plex Mono", monospace; font-size:.7rem; color:var(--accent);
+  font-family:var(--pile-nombres); font-size:.7rem; color:var(--accent);
   border:1px solid var(--accent); border-radius:2px; padding:0 .28rem; flex:none;
 }
 .facts{display:grid; gap:.75rem}
@@ -495,7 +664,7 @@ details summary:focus-visible{outline:2px solid var(--accent); outline-offset:2p
 .fact .k{color:var(--ink-soft); font-size:.79rem}
 .fact .conf{font-size:.7rem; color:var(--ink-faint)}
 .fact .val{
-  grid-column:1 / -1; font-family:"IBM Plex Mono", ui-monospace, monospace;
+  grid-column:1 / -1; font-family:var(--pile-nombres);
   font-variant-numeric:tabular-nums; font-size:.92rem; color:var(--ink); overflow-wrap:anywhere;
 }
 table{width:100%; border-collapse:collapse; font-size:.82rem}
@@ -504,7 +673,7 @@ th{font-weight:500; color:var(--ink-soft); font-size:.78rem}
 .scroller{overflow-x:auto}
 .perf th:first-child{width:45%}
 .perf td{
-  font-family:"IBM Plex Mono", ui-monospace, monospace; font-variant-numeric:tabular-nums;
+  font-family:var(--pile-nombres); font-variant-numeric:tabular-nums;
   text-align:right; white-space:nowrap; padding-left:.7rem;
 }
 .perf thead th{border-bottom:1px solid var(--line-strong); padding-bottom:.35rem; text-align:right}
@@ -513,7 +682,7 @@ th{font-weight:500; color:var(--ink-soft); font-size:.78rem}
 
 .headline{display:flex; align-items:baseline; gap:.5rem; margin:.2rem 0 .5rem}
 .headline .value{
-  font-family:"IBM Plex Mono", monospace; font-size:2rem; font-weight:500;
+  font-family:var(--pile-nombres); font-size:2rem; font-weight:500;
   letter-spacing:-.02em; line-height:1; color:var(--accent);
 }
 .headline .unit{color:var(--ink-soft); font-size:.85rem}
@@ -525,9 +694,85 @@ th{font-weight:500; color:var(--ink-soft); font-size:.78rem}
 .caption{margin:.45rem 0 0; font-size:.75rem; color:var(--ink-faint)}
 .uncert{border-left:2px solid var(--oxide); padding:.1rem 0 .1rem .7rem; font-size:.8rem; color:var(--ink-soft)}
 .fichiers{display:grid; gap:.4rem; margin:0; padding:0; list-style:none; font-size:.82rem}
-.fichiers a{color:var(--accent); text-decoration:none; font-family:"IBM Plex Mono", ui-monospace, monospace}
+.fichiers a{color:var(--accent); text-decoration:none; font-family:var(--pile-nombres)}
 .fichiers a:hover{text-decoration:underline}
 .vide{color:var(--ink-soft); font-size:.85rem}
+
+/* ---- instrument : la carte d'occupation et les deux curseurs ---- */
+.instrument{
+  border-bottom:1px solid var(--line); background:var(--paper);
+  padding:.9rem 1.1rem 1rem; display:grid; gap:.75rem;
+  grid-template-columns:minmax(0,1fr) 19rem;
+}
+.instrument h2{
+  font-size:var(--t-section, 20px); font-weight:600; margin:0 0 .35rem; line-height:1.25;
+}
+.carte-boite{position:relative; border:1px solid var(--line); background:var(--fond)}
+#carte-canevas{display:block; width:100%; height:auto; cursor:crosshair}
+.instrument{grid-template-columns:minmax(0,1fr) 21rem}
+.lecture{
+  position:absolute; top:.5rem; right:.5rem; background:var(--fond);
+  border:1px solid var(--line); padding:.4rem .55rem; min-width:8.5rem;
+  font-family:var(--pile-nombres); font-variant-numeric:tabular-nums;
+  font-size:var(--t-nombre, 13px); line-height:1.55; pointer-events:none;
+}
+.lecture dt{display:inline-block; width:1.4rem; color:var(--ink-soft); font-family:var(--pile-texte)}
+.lecture dd{display:inline; margin:0}
+.lecture div{white-space:nowrap}
+.bascules{display:flex; flex-wrap:wrap; gap:.3rem; margin-top:.5rem}
+.bascule{
+  font:inherit; font-size:var(--t-controle, 13px); font-weight:500;
+  color:var(--ink); background:transparent; border:1px solid var(--line-strong);
+  padding:.25rem .55rem; cursor:pointer;
+}
+.bascule[aria-pressed="true"]{background:var(--mesure); border-color:var(--mesure); color:var(--fond)}
+.bascule:focus-visible{outline:2px solid var(--mesure); outline-offset:1px}
+
+.reglages{display:grid; gap:.9rem; align-content:start}
+.reglage{display:grid; gap:.25rem}
+.reglage .titre{
+  display:flex; justify-content:space-between; align-items:baseline; gap:.5rem;
+  font-size:var(--t-controle, 13px); font-weight:500;
+}
+.reglage output{
+  font-family:var(--pile-nombres); font-variant-numeric:tabular-nums; font-weight:600;
+}
+.reglage input[type=range]{width:100%; accent-color:var(--mesure); margin:0}
+.reglage .bornes{
+  display:flex; justify-content:space-between;
+  font-size:var(--t-note, 11px); color:var(--ink-soft);
+  font-family:var(--pile-nombres); font-variant-numeric:tabular-nums;
+}
+.reglage.franchi output{color:var(--limite)}
+.reglage.franchi input[type=range]{accent-color:var(--limite)}
+.alerte-limite{
+  font-size:var(--t-note, 11px); color:var(--limite); font-weight:500;
+  border-left:2px solid var(--limite); padding-left:.45rem;
+}
+.alerte-limite[hidden]{display:none}
+
+.vivant{width:100%; border-collapse:collapse; font-size:var(--t-nombre, 13px)}
+.vivant th{
+  text-align:left; font-family:var(--pile-texte); font-weight:500;
+  color:var(--ink-soft); font-size:var(--t-controle, 13px); padding:.22rem 0;
+}
+.vivant td{
+  text-align:right; font-family:var(--pile-nombres); font-variant-numeric:tabular-nums;
+  padding:.22rem 0 .22rem .6rem; white-space:nowrap;
+}
+.vivant td.src{
+  text-align:left; font-family:var(--pile-texte); font-size:var(--t-note, 11px);
+  color:var(--ink-soft); padding-left:.5rem;
+}
+.vivant tr + tr th, .vivant tr + tr td{border-top:1px solid var(--line)}
+/* Provenance : la couleur ne porte pas seule. */
+.p-mesure{font-weight:600}
+.p-declare{font-weight:400; border-left:2px solid var(--declare); padding-left:.35rem}
+.p-defaut{font-weight:400; color:var(--ink-soft); font-style:italic}
+.c-low{border-left:2px solid var(--limite); padding-left:.35rem}
+.miniplot{width:100%; height:auto; display:block; border:1px solid var(--line); margin-top:.2rem}
+@media (max-width:60rem){ .instrument{grid-template-columns:minmax(0,1fr)} }
+
 @media (prefers-reduced-motion:reduce){ *{animation:none !important; transition:none !important} }
 </style>
 
@@ -536,9 +781,44 @@ th{font-weight:500; color:var(--ink-soft); font-size:.78rem}
     <h1 id="titre">Inspecteur de roue</h1>
     <span class="file" id="fichier"></span>
     <div class="verdicts" id="verdicts"></div>
+    <button type="button" class="bascule" id="bascule-theme"
+            aria-pressed="false" title="Basculer clair / sombre">sombre</button>
   </header>
 
   <main>
+
+    <section class="instrument" id="instrument" hidden>
+      <div>
+        <h2>Carte d'occupation f(r, z)</h2>
+        <div class="carte-boite">
+          <canvas id="carte-canevas" width="900" height="460"></canvas>
+          <dl class="lecture" id="lecture">
+            <div><dt>r</dt><dd id="lec-r">&mdash;</dd></div>
+            <div><dt>z</dt><dd id="lec-z">&mdash;</dd></div>
+            <div><dt>f</dt><dd id="lec-f">&mdash;</dd></div>
+          </dl>
+        </div>
+        <div class="bascules" id="bascules"></div>
+      </div>
+
+      <div class="reglages">
+        <div class="reglage" id="reglage-regime">
+          <div class="titre"><span>Regime</span><output id="sortie-regime"></output></div>
+          <input type="range" id="curseur-regime" min="200" max="4000" step="10">
+          <div class="bornes"><span id="borne-min"></span><span id="borne-max"></span></div>
+          <p class="alerte-limite" id="alerte-cavitation" hidden></p>
+        </div>
+
+        <div class="reglage" id="reglage-beta">
+          <div class="titre"><span>beta2 &plusmn; 1&deg;</span><output id="sortie-beta"></output></div>
+          <input type="range" id="curseur-beta" min="-1" max="1" step="0.05" value="0">
+          <div class="bornes"><span>&minus;1&deg;</span><span>+1&deg;</span></div>
+        </div>
+
+        <table class="vivant"><tbody id="valeurs-vives"></tbody></table>
+        <canvas class="miniplot" id="miniplot" width="360" height="180"></canvas>
+      </div>
+    </section>
     <section class="stage" id="stage">
       <canvas id="gl"></canvas>
       <div class="fallback">
@@ -978,13 +1258,392 @@ const titre = document.getElementById("titre");
 const fichierNom = document.getElementById("fichier");
 const verdicts = document.getElementById("verdicts");
 
+
+/* ---------------------------------------------------------------------------
+   L'instrument : la carte d'occupation, et les deux manipulations qui comptent.
+
+   La carte est la lecture dont tout le reste decoule -- elle merite d'etre
+   interrogeable et pas seulement regardable. Les deux curseurs recalculent dans
+   la page, mais aucun ne reimplemente le modele : le regime passe par les lois
+   de similitude que l'outil verifie deja a 0.00 %, et beta2 interpole entre
+   trois courbes reellement calculees en Python.
+--------------------------------------------------------------------------- */
+const INSTRUMENT = {grille:null, vif:null, f:null, bascules:{}, rpm:0, dbeta:0};
+
+function lireOctets(b64){
+  const brut = atob(b64), out = new Uint8Array(brut.length);
+  for (let i = 0; i < brut.length; i++) out[i] = brut.charCodeAt(i);
+  return out;
+}
+
+/* Meme rampe que les figures : teinte unique, luminance monotone. Une echelle
+   multicolore fabriquerait des frontieres que les donnees n'ont pas.
+
+   Les deux bornes viennent du theme et non de valeurs en dur : sinon la carte
+   garde un fond clair quand la page passe en sombre, et l'incoherence est
+   exactement celle qu'on cherchait a supprimer entre la page et les figures. */
+function composantes(nom, repli){
+  const v = getComputedStyle(document.body).getPropertyValue(nom).trim();
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(v);
+  return m ? [1,2,3].map(k => parseInt(m[k], 16)) : repli;
+}
+function rampe(t, bornes){
+  t = Math.max(0, Math.min(1, t));
+  const w = Math.pow(t, 0.85);
+  const [a, b] = bornes;
+  return [0,1,2].map(k => Math.round(a[k] + (b[k] - a[k]) * w));
+}
+/* La meme compression par morceaux que la figure PNG (plot.occupancy_scale) :
+   la bande de pales, souvent tres faible, garde l'essentiel de la dynamique. */
+function echelle(f){
+  const s = INSTRUMENT.grille.seuils;
+  if (f <= s.vide) return s.vide > 0 ? 0.15 * f / s.vide : 0;
+  if (f >= s.solide) return 0.85 + 0.15 * (f - s.solide) / (1 - s.solide);
+  return 0.15 + 0.70 * (f - s.vide) / (s.solide - s.vide);
+}
+
+function tracerCarte(){
+  const g = INSTRUMENT.grille, cv = document.getElementById("carte-canevas");
+  if (!g || !cv) return;
+  const ctx = cv.getContext("2d");
+  const pad = {g:52, d:16, h:14, b:34};
+  const W = cv.width, H = cv.height;
+  const px0 = pad.g, px1 = W - pad.d, py0 = pad.h, py1 = H - pad.b;
+  const style = getComputedStyle(document.body);
+  const encre = style.getPropertyValue("--encre").trim() || "#16232B";
+  const grille = style.getPropertyValue("--grille").trim() || "#DDE3E0";
+  const declare = style.getPropertyValue("--declare").trim() || "#5B4B8A";
+  const limite = style.getPropertyValue("--limite").trim() || "#9B1D20";
+  ctx.fillStyle = style.getPropertyValue("--fond").trim() || "#FBFBFA";
+  ctx.fillRect(0, 0, W, H);
+
+  const rMax = g.r[g.r.length - 1], zMin = g.z[0], zMax = g.z[g.z.length - 1];
+  const X = r => px0 + (px1 - px0) * r / rMax;
+  const Y = z => py1 - (py1 - py0) * (z - zMin) / (zMax - zMin);
+
+  const bornes = [composantes("--fond", [251, 251, 250]),
+                  composantes("--mesure", [29, 111, 106])];
+  const img = ctx.createImageData(g.nr, g.nz);
+  for (let iz = 0; iz < g.nz; iz++) {
+    for (let ir = 0; ir < g.nr; ir++) {
+      const f = INSTRUMENT.f[iz * g.nr + ir] / 255;
+      const c = rampe(echelle(f), bornes);
+      /* l'image se dessine du haut vers le bas, la grille du bas vers le haut */
+      const o = ((g.nz - 1 - iz) * g.nr + ir) * 4;
+      img.data[o] = c[0]; img.data[o+1] = c[1]; img.data[o+2] = c[2]; img.data[o+3] = 255;
+    }
+  }
+  const tampon = document.createElement("canvas");
+  tampon.width = g.nr; tampon.height = g.nz;
+  tampon.getContext("2d").putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(tampon, px0, py0, px1 - px0, py1 - py0);
+
+  ctx.strokeStyle = grille; ctx.lineWidth = 1;
+  ctx.strokeRect(px0 + .5, py0 + .5, px1 - px0 - 1, py1 - py0 - 1);
+  ctx.fillStyle = encre;
+  ctx.font = '11px ' + style.getPropertyValue("--pile-nombres");
+  ctx.textAlign = "center";
+  for (let k = 0; k <= 4; k++) {
+    const r = rMax * k / 4;
+    ctx.fillText(r.toFixed(0), X(r), py1 + 14);
+  }
+  ctx.fillText("rayon r (mm)", (px0 + px1) / 2, py1 + 28);
+  ctx.textAlign = "right";
+  for (let k = 0; k <= 4; k++) {
+    const z = zMin + (zMax - zMin) * k / 4;
+    ctx.fillText(z.toFixed(0), px0 - 6, Y(z) + 3);
+  }
+
+  const rep = g.reperes || {};
+  const trait = (couleur, tirets, dessin) => {
+    ctx.save(); ctx.strokeStyle = couleur; ctx.lineWidth = 1.5;
+    ctx.setLineDash(tirets); dessin(); ctx.restore();
+  };
+  const marque = (texte, x, y, couleur) => {
+    ctx.save(); ctx.fillStyle = couleur; ctx.textAlign = "left";
+    ctx.font = '11px ' + style.getPropertyValue("--pile-texte");
+    ctx.fillText(texte, x + 3, y - 3); ctx.restore();
+  };
+
+  if (INSTRUMENT.bascules.axe) {
+    trait(encre, [6, 4], () => {
+      ctx.beginPath(); ctx.moveTo(X(0), py0); ctx.lineTo(X(0), py1); ctx.stroke();
+    });
+    marque("axe", X(0), py0 + 12, encre);
+  }
+  if (INSTRUMENT.bascules.rayons) {
+    for (const [cle, libelle] of [["r1h","r1h"], ["r1s","r1s"], ["r2","r2"]]) {
+      const v = rep[cle];
+      if (!v) continue;
+      trait(declare, [], () => {
+        ctx.beginPath(); ctx.moveTo(X(v), py0); ctx.lineTo(X(v), py1); ctx.stroke();
+      });
+      marque(libelle, X(v), py1 - 4, declare);
+    }
+  }
+  if (INSTRUMENT.bascules.plans) {
+    for (const [cle, libelle] of [["z1","entree"], ["z2","sortie"]]) {
+      const v = rep[cle];
+      if (v === undefined || v === null) continue;
+      trait(encre, [2, 3], () => {
+        ctx.beginPath(); ctx.moveTo(px0, Y(v)); ctx.lineTo(px1, Y(v)); ctx.stroke();
+      });
+      marque(libelle, px0, Y(v), encre);
+    }
+    /* Le sens debitant : une fleche, pas une convention ecrite. */
+    const x = px1 - 26, y0 = py0 + 26, y1 = py0 + 66;
+    const bas = g.sens_debitant < 0;
+    trait(encre, [], () => {
+      ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x - 4, bas ? y1 - 7 : y0 + 7);
+      ctx.lineTo(x, bas ? y1 : y0); ctx.lineTo(x + 4, bas ? y1 - 7 : y0 + 7);
+      ctx.stroke();
+    });
+  }
+  if (INSTRUMENT.bascules.boucle && rep.boucle) {
+    const b = rep.boucle;
+    trait(limite, [5, 3], () => {
+      for (const v of [b.r_interieur, b.r_exterieur]) {
+        if (!v) continue;
+        ctx.beginPath(); ctx.moveTo(X(v), py0); ctx.lineTo(X(v), py1); ctx.stroke();
+      }
+    });
+    if (b.r_fusion) {
+      trait(limite, [], () => {
+        ctx.beginPath(); ctx.moveTo(X(b.r_fusion), py0); ctx.lineTo(X(b.r_fusion), py1); ctx.stroke();
+      });
+      marque("fusion des brins", X(b.r_fusion), py0 + 26, limite);
+    }
+    marque("bande a deux brins", X(b.r_interieur), py0 + 12, limite);
+  }
+}
+
+function survolCarte(evenement){
+  const g = INSTRUMENT.grille, cv = document.getElementById("carte-canevas");
+  if (!g) return;
+  const boite = cv.getBoundingClientRect();
+  const echX = cv.width / boite.width, echY = cv.height / boite.height;
+  const x = (evenement.clientX - boite.left) * echX;
+  const y = (evenement.clientY - boite.top) * echY;
+  const pad = {g:52, d:16, h:14, b:34};
+  const px0 = pad.g, px1 = cv.width - pad.d, py0 = pad.h, py1 = cv.height - pad.b;
+  const rMax = g.r[g.r.length - 1], zMin = g.z[0], zMax = g.z[g.z.length - 1];
+  const dedans = x >= px0 && x <= px1 && y >= py0 && y <= py1;
+  const mettre = (id, v) => { document.getElementById(id).textContent = v; };
+  if (!dedans) { mettre("lec-r", "—"); mettre("lec-z", "—"); mettre("lec-f", "—"); return; }
+  const r = rMax * (x - px0) / (px1 - px0);
+  const z = zMin + (zMax - zMin) * (py1 - y) / (py1 - py0);
+  const ir = Math.max(0, Math.min(g.nr - 1, Math.round(r / rMax * (g.nr - 1))));
+  const iz = Math.max(0, Math.min(g.nz - 1, Math.round((z - zMin) / (zMax - zMin) * (g.nz - 1))));
+  const f = INSTRUMENT.f[iz * g.nr + ir] / 255;
+  mettre("lec-r", r.toFixed(1) + " mm");
+  mettre("lec-z", (z >= 0 ? "+" : "") + z.toFixed(1) + " mm");
+  mettre("lec-f", f.toFixed(3));
+}
+
+/* Regime : lois de similitude. H comme n^2, Q comme n, P comme n^3, NPSHr
+   comme n^2. C'est le modele lui-meme, pas une approximation -- le controle de
+   similitude du rapport le verifie a 0.00 %. */
+function auRegime(base, rpm, reference){
+  const n = rpm / reference;
+  return {Q: base.Q * n, H: base.H * n * n, P: base.P * n * n * n,
+          couple: base.couple * n * n, npshr: base.npshr * n * n,
+          rendement: base.rendement};
+}
+
+/* beta2 : interpolation entre trois courbes reellement calculees. */
+function familleInterpolee(ecart){
+  const fam = INSTRUMENT.vif.familles;
+  if (fam.length === 1) return fam[0];
+  const centre = fam.find(f => Math.abs(f.ecart) < 1e-9) || fam[0];
+  if (Math.abs(ecart) < 1e-9) return centre;
+  const cible = fam.find(f => Math.sign(f.ecart) === Math.sign(ecart) && f.ecart !== 0);
+  if (!cible) return centre;
+  const t = Math.min(1, Math.abs(ecart) / Math.abs(cible.ecart));
+  const melange = (a, b) => a.map((v, i) => v + (b[i] - v) * t);
+  return {beta2: centre.beta2 + (cible.beta2 - centre.beta2) * t,
+          Q: melange(centre.Q, cible.Q), H: melange(centre.H, cible.H),
+          rendement: melange(centre.rendement, cible.rendement),
+          npshr: melange(centre.npshr, cible.npshr), interpolee: t > 0 && t < 1};
+}
+
+function tracerMiniplot(famille){
+  const cv = document.getElementById("miniplot");
+  if (!cv) return;
+  const ctx = cv.getContext("2d");
+  const st = getComputedStyle(document.body);
+  ctx.fillStyle = st.getPropertyValue("--fond").trim(); ctx.fillRect(0, 0, cv.width, cv.height);
+  const pad = 24, W = cv.width, H = cv.height;
+  const toutes = INSTRUMENT.vif.familles;
+  const qMax = Math.max(...toutes.flatMap(f => f.Q)) || 1;
+  const hMax = Math.max(...toutes.flatMap(f => f.H)) || 1;
+  const X = q => pad + (W - pad - 8) * q / qMax;
+  const Y = h => H - pad - (H - pad - 8) * h / hMax;
+  ctx.strokeStyle = st.getPropertyValue("--grille").trim(); ctx.lineWidth = 1;
+  ctx.strokeRect(pad + .5, 8.5, W - pad - 8, H - pad - 8);
+  /* La bande beta2 +/- 1 degre : ce que le rapport annonce en mots, montre. */
+  ctx.save(); ctx.globalAlpha = .30;
+  ctx.fillStyle = st.getPropertyValue("--declare").trim();
+  ctx.beginPath();
+  const bas = toutes[0], haut = toutes[toutes.length - 1];
+  bas.Q.forEach((q, i) => i ? ctx.lineTo(X(q), Y(bas.H[i])) : ctx.moveTo(X(q), Y(bas.H[i])));
+  for (let i = haut.Q.length - 1; i >= 0; i--) ctx.lineTo(X(haut.Q[i]), Y(haut.H[i]));
+  ctx.closePath(); ctx.fill(); ctx.restore();
+  ctx.strokeStyle = st.getPropertyValue("--mesure").trim(); ctx.lineWidth = 2;
+  ctx.beginPath();
+  famille.Q.forEach((q, i) => i ? ctx.lineTo(X(q), Y(famille.H[i])) : ctx.moveTo(X(q), Y(famille.H[i])));
+  ctx.stroke();
+  ctx.fillStyle = st.getPropertyValue("--encre").trim();
+  ctx.font = '10px ' + st.getPropertyValue("--pile-texte");
+  ctx.textAlign = "left"; ctx.fillText("H (m)", 2, 14);
+  ctx.textAlign = "right"; ctx.fillText("Q (m3/h)", W - 4, H - 6);
+}
+
+function rafraichirVif(){
+  const v = INSTRUMENT.vif;
+  if (!v || !v.point) return;
+  const rpm = INSTRUMENT.rpm;
+  const famille = familleInterpolee(INSTRUMENT.dbeta);
+  /* Le facteur beta2 est lu sur la courbe interpolee, puis transporte au
+     regime demande par les lois de similitude. Les deux effets se composent. */
+  const centre = v.familles.find(f => Math.abs(f.ecart) < 1e-9) || v.familles[0];
+  const iBep = centre.H.indexOf(Math.max(...centre.H.filter((h, i) => centre.Q[i] > 0)));
+  const facteurH = (famille.H[iBep] || 0) / (centre.H[iBep] || 1);
+  const base = Object.assign({}, v.point, {H: v.point.H * facteurH});
+  const p = auRegime(base, rpm, v.rpm_reference);
+
+  const provenance = v.beta2_provenance;
+  const classe = provenance === "declare" ? "p-declare" : "p-mesure";
+  const lignes = [
+    ["Debit", p.Q.toFixed(1), "m3/h", "p-mesure", "mesure"],
+    ["Hauteur", p.H.toFixed(2), "m", classe, provenance],
+    ["Puissance", p.P.toFixed(2), "kW", classe, provenance],
+    ["Couple", p.couple.toFixed(1), "N.m", classe, provenance],
+    ["NPSH requis", p.npshr.toFixed(2), "m", "p-mesure", "mesure"],
+    ["beta2", famille.beta2.toFixed(2), "deg", classe, provenance],
+  ];
+  const corps = document.getElementById("valeurs-vives");
+  corps.replaceChildren();
+  for (const [nom, valeur, unite, classeLigne, src] of lignes) {
+    const tr = document.createElement("tr");
+    const th = document.createElement("th"); th.textContent = nom;
+    const td = document.createElement("td");
+    td.className = classeLigne; td.textContent = valeur + " " + unite;
+    const ts = document.createElement("td"); ts.className = "src"; ts.textContent = src;
+    tr.append(th, td, ts); corps.append(tr);
+  }
+
+  document.getElementById("sortie-regime").textContent = rpm.toFixed(0) + " tr/min";
+  const ecart = INSTRUMENT.dbeta;
+  document.getElementById("sortie-beta").textContent =
+    (ecart >= 0 ? "+" : "") + ecart.toFixed(2) + " deg";
+
+  const franchi = v.rpm_limite > 0 && rpm > v.rpm_limite;
+  document.getElementById("reglage-regime").classList.toggle("franchi", franchi);
+  const alerte = document.getElementById("alerte-cavitation");
+  alerte.hidden = !franchi;
+  if (franchi) {
+    alerte.textContent = "au-dela de " + v.rpm_limite + " tr/min : limite "
+      + (v.limite_active || "de cavitation") + " franchie. Le NPSH disponible ne couvre plus "
+      + "le NPSH requis a ce regime.";
+  }
+  tracerMiniplot(famille);
+}
+
+/* Le theme sombre reste disponible, il cesse d'etre le defaut. Le choix est
+   garde d'une ouverture a l'autre ; sur un fichier ouvert depuis le disque,
+   localStorage peut etre indisponible, et l'echec ne doit pas casser la page. */
+function monterTheme(){
+  const bouton = document.getElementById("bascule-theme");
+  if (!bouton) return;
+  let actuel = "clair";
+  try { actuel = localStorage.getItem("theme-inspecteur") || "clair"; } catch (e) {}
+  const appliquer = () => {
+    document.documentElement.setAttribute("data-theme", actuel);
+    bouton.setAttribute("aria-pressed", String(actuel === "sombre"));
+    bouton.textContent = actuel === "sombre" ? "clair" : "sombre";
+    if (INSTRUMENT.grille) tracerCarte();
+    if (INSTRUMENT.vif) rafraichirVif();
+  };
+  bouton.addEventListener("click", () => {
+    actuel = actuel === "sombre" ? "clair" : "sombre";
+    try { localStorage.setItem("theme-inspecteur", actuel); } catch (e) {}
+    appliquer();
+  });
+  appliquer();
+}
+
+function monterInstrument(payload){
+  const section = document.getElementById("instrument");
+  if (!section || !payload.grille || !payload.grille.nr) return;
+  INSTRUMENT.grille = payload.grille;
+  INSTRUMENT.vif = payload.vif && payload.vif.point ? payload.vif : null;
+  INSTRUMENT.f = lireOctets(payload.grille.f);
+  INSTRUMENT.bascules = {axe:true, rayons:true, plans:false,
+                         boucle: !!(payload.grille.reperes || {}).boucle};
+  section.hidden = false;
+
+  const boite = document.getElementById("bascules");
+  boite.replaceChildren();
+  const choix = [["axe", "axe"], ["rayons", "r1h r1s r2"], ["plans", "plans et sens debitant"]];
+  if (INSTRUMENT.bascules.boucle) choix.push(["boucle", "brins et fusion"]);
+  for (const [cle, libelle] of choix) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "bascule"; b.textContent = libelle;
+    b.setAttribute("aria-pressed", String(!!INSTRUMENT.bascules[cle]));
+    b.addEventListener("click", () => {
+      INSTRUMENT.bascules[cle] = !INSTRUMENT.bascules[cle];
+      b.setAttribute("aria-pressed", String(INSTRUMENT.bascules[cle]));
+      tracerCarte();
+    });
+    boite.append(b);
+  }
+  const cv = document.getElementById("carte-canevas");
+  cv.addEventListener("mousemove", survolCarte);
+  cv.addEventListener("mouseleave", survolCarte);
+  tracerCarte();
+
+  const reglageBeta = document.getElementById("reglage-beta");
+  if (!INSTRUMENT.vif) {
+    document.getElementById("reglage-regime").hidden = true;
+    reglageBeta.hidden = true;
+    document.getElementById("miniplot").hidden = true;
+    return;
+  }
+  const v = INSTRUMENT.vif;
+  const curseur = document.getElementById("curseur-regime");
+  curseur.min = Math.round(v.rpm_min); curseur.max = Math.round(v.rpm_max_affiche);
+  curseur.value = Math.round(v.rpm_reference);
+  INSTRUMENT.rpm = v.rpm_reference;
+  document.getElementById("borne-min").textContent = curseur.min;
+  document.getElementById("borne-max").textContent = curseur.max;
+  curseur.addEventListener("input", () => {
+    INSTRUMENT.rpm = Number(curseur.value); rafraichirVif();
+  });
+  const cbeta = document.getElementById("curseur-beta");
+  reglageBeta.hidden = v.familles.length < 2;
+  cbeta.addEventListener("input", () => {
+    INSTRUMENT.dbeta = Number(cbeta.value); rafraichirVif();
+  });
+  rafraichirVif();
+}
+
 function facts(rows){
+  /* Quatre colonnes depuis C4 : libelle, valeur, provenance, confiance. La
+     provenance se marque aussi par la graisse et un filet, jamais par la seule
+     couleur ; une confiance faible ajoute son filet rouge. */
   const box = el("div", {class:"facts"});
+  const classes = {mesure:"p-mesure", declare:"p-declare", defaut:"p-defaut"};
   for (const row of rows) {
+    const [libelle, valeur, provenance, confiance] = row;
+    let classe = "val " + (classes[provenance] || "p-mesure");
+    if (confiance === "faible") classe += " c-low";
     box.append(el("div", {class:"fact"},
-      el("span", {class:"k"}, row[0]),
-      el("span", {class:"conf"}, row[2] || ""),
-      el("span", {class:"val"}, row[1])));
+      el("span", {class:"k"}, libelle),
+      el("span", {class:"conf"}, [provenance, confiance].filter(Boolean).join(" \u00b7 ")),
+      el("span", {class:classe}, confiance === "faible" ? "(" + valeur + ")" : valeur)));
   }
   return box;
 }
@@ -1079,6 +1738,8 @@ function render(payload){
   buildHeader(payload);
   buildLegend(payload);
   buildRail(payload);
+  monterInstrument(payload);
+  monterTheme();
   for (const b of outils.querySelectorAll("button")) b.setAttribute("aria-pressed", "false");
   spinButton.textContent = "Faire tourner";
   var sens = payload.resume.rotation_signe || payload.resume.rotation_suggeree;
