@@ -291,3 +291,45 @@ class TestDomaineDesEntrees(BaseTestCase):
 
 if __name__ == "__main__":  # pragma: no cover - execution directe
     unittest.main()
+
+
+class TestGenreTopologique(AuditTestCase):
+    """Le genre tranche ce que l'occupation ne peut pas, et se tait quand il ment.
+
+    Un maillage a peine ouvert garde une caracteristique d'Euler lisible : la
+    piece d'essai reelle, 60 aretes de bord sur 44 301, rend un genre de 6 pour
+    5 pales -- une anse par boucle.  Un maillage **dechire**, lui, fabrique une
+    anse par trou : la meme roue centrifuge conventionnelle privee de 5 % de ses
+    triangles rend un genre de 185.  Le genre ne vaut donc que sous deux
+    conditions, et il faut les deux.
+    """
+
+    def test_le_genre_explose_avec_les_dechirures(self):
+        """C'est la mesure qui justifie le garde-fou : 0 sain, des centaines troue."""
+        from impeller_analyzer.components import genus
+
+        plein = synthetic.centrifugal_impeller(n_radial=40, n_span=10)
+        self.assertEqual(genus(plein)[0], 0, "une roue saine est de genre 0")
+
+        generator = random.Random(0)
+        troue = TriMesh(plein.vertices,
+                        [f for f in plein.faces if generator.random() < 0.95])
+        genre = genus(troue)[0]
+        self.assertGreater(genre, 100,
+                           "5 % de triangles en moins doivent suffire a fabriquer "
+                           "des dizaines d'anses parasites")
+
+    def test_un_maillage_dechire_reste_hors_de_portee_du_genre(self):
+        """Le garde-fou sur la part d'aretes ouvertes doit tenir."""
+        torn = TestMaillageDechire.dechirer(self, synthetic.centrifugal_impeller())
+        result = self.lire(torn, name="dechire_genre.stl")
+        self.assertFalse(
+            result.blade_loops.looped,
+            "un genre gonfle par les dechirures ne doit pas conclure a une boucle",
+        )
+
+    def test_le_genre_reste_dans_l_ordre_de_grandeur_des_pales(self):
+        """Une boucle vaut une anse : au-dela de trois par pale, ce sont des trous."""
+        self.assertGreaterEqual(config.GENUS_PER_BLADE_MAX, 1.0)
+        self.assertLessEqual(config.GENUS_DAMAGE_MAX, 0.02,
+                             "le seuil doit rester bien sous les 9 % d'un maillage dechire")

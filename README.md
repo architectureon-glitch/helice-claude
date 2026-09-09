@@ -463,6 +463,71 @@ Deux précisions de moindre portée :
   et non en pour-cent : 2 % n'a pas de sens sur un angle qui varie fortement le
   long de la pale.
 
+## Import par composants déclarés
+
+Le mode d'import global reste disponible, inchangé. Celui-ci s'ajoute à côté, et
+renverse la charge : l'utilisateur déclare ce qu'il sait, fournit les pièces
+séparément, et **l'outil vérifie au lieu de deviner**.
+
+```bash
+python -m impeller_analyzer --machine helice_libre --blades 5 \
+    --topologie-pale toroidale \
+    --entree-fluide entree.stl --sortie-fluide sortie.stl \
+    --moyeu moyeu.stl --pale pale.stl --coque coque.stl
+```
+
+Trois déclarations — modèle hydraulique, topologie de pale, nombre de pales —
+qui ne sont jamais inférées en mode composants. Cinq emplacements, dont trois
+obligatoires (entrée fluide, sortie fluide, pale). Une seule pale est importée :
+les N−1 autres sont reconstruites par rotation.
+
+### Le contrat d'export
+
+> Toutes les pièces exportées depuis le même repère CAO, **sans recentrage**,
+> Z pour axe, en centimètres.
+
+C'est ce contrat qui remplace la détection d'axe et le recentrage. Le fichier
+d'essai réel se trouve à **23,8 m de l'origine CAO** — et c'est normal, c'est là
+que la CAO l'avait mis. Le contrat fixe la *direction* de l'axe, pas sa position :
+celle-ci est mesurée sur les solides fluide, qui sont des couronnes centrées
+dessus.
+
+### Ce que le mode apporte
+
+| | Import global | Composants déclarés |
+|---|---|---|
+| Section d'entrée A1 | π(r1s²−r1h²), suspendue à deux détections | **volume/épaisseur** du solide d'entrée, à 0,02 % |
+| Sens du fluide | convention « refoulement vers −Z » | vecteur mesuré entrée→sortie |
+| Sens de rotation | indéterminé, à déclarer | déduit : `signe(ω) = signe(k·flux_z)` |
+| Nombre de pales | analyse de Fourier | déclaré |
+| Type de roue | classification géométrique | déclaré |
+
+### Les six contrôles
+
+Une déclaration est une entrée, jamais une dispense de contrôle. Un seul est
+**bloquant** — le repère commun — et pour une raison précise : sa violation ne se
+voit sur aucune grandeur publiée. Chaque pièce se lit correctement dans son coin,
+et seule leur position relative, donc tout ce que le mode apporte, est fausse.
+
+Les cinq autres avertissent sans annuler : interpénétration des boîtes, position
+de la pale entre les deux plans, nombre de pales trop grand pour l'étendue
+azimutale de la pale, topologie déclarée confrontée au **genre topologique**, et
+étanchéité.
+
+### Le genre topologique tranche ce que l'occupation ne peut pas
+
+Une aube en boucle est un tore : une anse par pale. Le fichier d'essai réel rend
+un **genre de 6 pour 5 pales** — et le genre ne dépend pas de l'étanchéité, là où
+la signature par carte d'occupation devait suspendre son verdict sur un maillage
+à 60 arêtes de bord. Les deux lectures concordent, et le verdict cesse d'être
+indécidable.
+
+Avec un garde-fou, mesuré et nécessaire : **chaque déchirure fabrique une anse**.
+La même roue centrifuge conventionnelle privée de 5 % de ses triangles rend un
+genre de **185**. Le genre n'est donc lu que sous deux conditions cumulées — moins
+de 1 % d'arêtes ouvertes, et un genre compris entre une et trois anses par pale.
+Sans elles, on échangerait un verdict faux contre un autre.
+
 ## Ce que l'outil déclare, et ce qu'il mesure
 
 Quatre corrections de la même famille : l'outil affirmait, à quelques endroits,
@@ -795,9 +860,10 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-258 tests : une phase par module, le banc d'audit qui balaie des roues entières
+279 tests : une phase par module, le banc d'audit qui balaie des roues entières
 et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
-hélice libre, et ce que l'outil a le droit d'affirmer. Ils passent aussi sous
+hélice libre, ce que l'outil a le droit d'affirmer, et l'import par composants
+déclarés avec ses six contrôles. Ils passent aussi sous
 `pytest` si vous l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture

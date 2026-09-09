@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .. import config
-from ..confidence import HIGH, LOW
+from ..confidence import HIGH, LOW, MEDIUM
 from .occupancy import OccupancyMap
 
 
@@ -54,6 +54,7 @@ class LoopResult:
 
     looped: bool = False
     undecided: bool = False
+    genus: int = 0  # genre topologique, quand il a servi a trancher
     peak_fraction: float = 0.0
     r_inner: float = 0.0
     r_outer: float = 0.0
@@ -68,6 +69,7 @@ class LoopResult:
         return {
             "aubes_en_boucle": self.looped,
             "verdict_suspendu": self.undecided,
+            "genre_topologique": self.genus or None,
             "fraction_dedoublee_max": self.peak_fraction,
             "rayon_interieur_de_boucle_m": self.r_inner or None,
             "rayon_exterieur_de_boucle_m": self.r_outer or None,
@@ -116,6 +118,7 @@ def detect_looped_blades(
     n_blades: int,
     blade_mask: list[list[bool]] | None = None,
     watertight: bool = True,
+    mesh=None,
 ) -> LoopResult:
     """Dit si les aubes se referment sur elles-memes (type toroidal).
 
@@ -149,6 +152,44 @@ def detect_looped_blades(
         return result
 
     result.r_inner, result.r_outer = min(doubled), max(doubled)
+    if not watertight and mesh is not None:
+        # Le maillage est troue, mais la **topologie** ne depend pas de
+        # l'etancheite au sens des volumes : la caracteristique d'Euler se
+        # calcule quand meme, et une aube en boucle est un tore -- une anse par
+        # boucle. Si le genre atteint le nombre de pales, la signature relevee
+        # sur la carte d'occupation n'est plus la seule preuve, et le verdict
+        # cesse d'etre indecidable.
+        from ..components import genus
+
+        genre, bords, _ = genus(mesh)
+        aretes = len(mesh.edge_map()) or 1
+        degat = len(mesh.boundary_edges()) / aretes
+        # Deux conditions, et il faut les deux. Le genre n'est lisible que sur
+        # un maillage a peine ouvert : chaque dechirure fabrique une anse, et
+        # une roue **conventionnelle** trouee a 5 % rend un genre de 185. Et il
+        # doit rester dans l'ordre de grandeur d'une anse par pale : au-dela,
+        # ce ne sont plus des boucles qu'on compte, ce sont des trous.
+        plausible = n_blades > 0 and (
+            n_blades <= genre <= config.GENUS_PER_BLADE_MAX * n_blades
+        )
+        if plausible and degat <= config.GENUS_DAMAGE_MAX:
+            result.looped = True
+            result.genus = genre
+            result.confidence = MEDIUM
+            result.warnings.append(
+                f"aubes en boucle fermee (type toroidal) : de r = "
+                f"{result.r_inner * config.MM_PER_M:.1f} a "
+                f"{result.r_outer * config.MM_PER_M:.1f} mm, une coupe a azimut fixe traverse "
+                f"l'aube deux fois sur {result.peak_fraction:.0%} des azimuts. Le maillage "
+                f"n'est pas etanche ({bords} composantes de bord pour {degat:.2%} d'aretes "
+                f"ouvertes), ce qui rendrait cette seule "
+                f"signature indecidable -- mais le **genre topologique** vaut {genre} pour "
+                f"{n_blades} pales, soit au moins une anse par pale, et le genre ne depend pas "
+                "de l'etancheite. Les deux lectures concordent. La cambrure est mise de cote au "
+                "profit des normales ; axe, nombre d'aubes, rayons et sections ne sont pas "
+                "concernes."
+            )
+            return result
     if not watertight:
         # Les trous d'un maillage non etanche coupent les tronçons en deux
         # exactement comme le ferait une boucle : la mesure ne distingue plus

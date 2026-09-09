@@ -11,6 +11,7 @@ import argparse
 import sys
 
 from . import __version__, config
+from . import components
 from .analysis import (
     MACHINE_AUTO,
     MACHINE_MODELS,
@@ -18,6 +19,7 @@ from .analysis import (
     WHEEL_TYPES,
     Options,
     run,
+    run_components,
 )
 from .geometry import blade_angles
 from .io import loader, report
@@ -51,7 +53,13 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("fichier", help="fichier de geometrie (.stl, .obj, .ply, .off, .step, .dxf...)")
+    parser.add_argument(
+        "fichier",
+        nargs="?",
+        default=None,
+        help="fichier de geometrie en import global (.stl, .obj, .ply, .off, .step, .dxf...) ; "
+             "facultatif si les emplacements du mode composants sont renseignes",
+    )
     parser.add_argument(
         "--unit",
         default="cm",
@@ -72,6 +80,28 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="regimes analyses, en tr/min (defaut : %(default)s)",
     )
+    composants = parser.add_argument_group(
+        "import par composants declares (SPEC v2)",
+        components.EXPORT_CONTRACT,
+    )
+    composants.add_argument("--coque", metavar="FICHIER", default=None,
+                            help="STL de la coque (facultatif) : rayon de carter, jeu en bout")
+    composants.add_argument("--moyeu", metavar="FICHIER", default=None,
+                            help="STL du moyeu (recommande) : r1h et longueur de moyeu")
+    composants.add_argument("--entree-fluide", metavar="FICHIER", default=None,
+                            help="tranche mince du plan d'entree (obligatoire en mode composants)")
+    composants.add_argument("--sortie-fluide", metavar="FICHIER", default=None,
+                            help="tranche mince du plan de sortie (obligatoire en mode composants)")
+    composants.add_argument("--pale", metavar="FICHIER", default=None,
+                            help="STL d'une seule pale (obligatoire en mode composants) ; "
+                                 "les N-1 autres sont reconstruites par rotation")
+    composants.add_argument(
+        "--topologie-pale",
+        choices=list(components.BLADE_TOPOLOGIES),
+        default=components.BLADE_CONVENTIONAL,
+        help="topologie de pale declaree ; choisit la logique de coupe (defaut : %(default)s)",
+    )
+
     parser.add_argument(
         "--machine",
         choices=list(MACHINE_MODELS),
@@ -171,6 +201,14 @@ def options_from_args(args: argparse.Namespace) -> Options:
         suction=args.aspiration,
         rotation=blade_angles.rotation_sign_from_name(args.rotation),
         machine=args.machine,
+        component_paths={
+            components.SLOT_SHELL: args.coque,
+            components.SLOT_HUB: args.moyeu,
+            components.SLOT_INLET: args.entree_fluide,
+            components.SLOT_OUTLET: args.sortie_fluide,
+            components.SLOT_BLADE: args.pale,
+        },
+        blade_topology=args.topologie_pale,
         wheel_type=args.type_de_roue,
         propulsion_speed=args.vitesse_avance,
         fluid=args.fluide,
@@ -241,8 +279,29 @@ def summarise(result, produced: dict[str, str]) -> str:
 def main(argv: list[str] | None = None) -> int:
     """Point d'entree ; renvoie le code de sortie du processus."""
     args = build_parser().parse_args(argv)
+    options = options_from_args(args)
+    composants = {k: v for k, v in options.component_paths.items() if v}
     try:
-        result = run(args.fichier, options_from_args(args))
+        if composants:
+            if args.machine == MACHINE_AUTO:
+                print(
+                    "erreur : le mode composants demande --machine pompe_carenee ou "
+                    "helice_libre. C'est la premiere des trois declarations : elle choisit le "
+                    "modele hydraulique et supprime la classification automatique.",
+                    file=sys.stderr,
+                )
+                return 2
+            result = run_components(options)
+        elif args.fichier:
+            result = run(args.fichier, options)
+        else:
+            print(
+                "erreur : aucun fichier a analyser. Donnez un fichier de geometrie en import "
+                "global, ou renseignez les emplacements du mode composants "
+                "(--entree-fluide, --sortie-fluide, --pale).",
+                file=sys.stderr,
+            )
+            return 2
     except loader.ImportError_ as error:
         print(f"erreur d'import : {error}", file=sys.stderr)
         return 2

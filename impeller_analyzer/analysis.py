@@ -12,8 +12,9 @@ import time
 from dataclasses import dataclass, field
 
 from . import config
-from .confidence import HIGH, LOW, ConfidenceMap, worst
-from .provenance import DECLARE, DEFAUT, ProvenanceMap
+from .confidence import HIGH, LOW, MEDIUM, ConfidenceMap, worst
+from . import components as components_module
+from .provenance import DECLARE, DEFAUT, MESURE, ProvenanceMap
 from .geometry import axis as axis_module
 from .geometry import blade_angles as blade_module
 from .geometry import blade_loops as loops_module
@@ -57,6 +58,8 @@ class Options:
     beta1_deg: float | None = None
     beta2_deg: float | None = None
     rotation: int | None = None  # +1 anti-horaire, -1 horaire, None : a indiquer
+    component_paths: dict = field(default_factory=dict)  # emplacements du mode composants
+    blade_topology: str = components_module.BLADE_CONVENTIONAL  # topologie de pale declaree
     machine: str = MACHINE_AUTO  # modele hydraulique : auto, pompe carenee, ou helice libre
     wheel_type: str = WHEEL_AUTO  # famille de roue declaree ; prime sur la classification
     propulsion_speed: float | None = None  # m/s - vitesse d'avance en helice libre ; None : pas d'analyse propulsive
@@ -190,6 +193,7 @@ class AnalysisResult:
     blades: blade_module.BladeGeometry | None = None
     blade_loops: loops_module.LoopResult | None = None
     blade_normals: normals_module.NormalAngles | None = None
+    assembly: components_module.ComponentAssembly | None = None
     propulsion: propulsion_module.PropulsionResult | None = None
     sensitivity: sensitivity_module.SensitivityReport | None = None
     meanline_input: meanline_module.MeanlineInput | None = None
@@ -229,6 +233,8 @@ class AnalysisResult:
             ),
             "forme_des_aubes": self.blade_loops.to_dict() if self.blade_loops else None,
             "angles_par_normales": self.blade_normals.to_dict() if self.blade_normals else None,
+            "composants": self.assembly.to_dict() if self.assembly else None,
+            "mode_d_import": "composants" if self.assembly else "vrac",
             "propulsion": self.propulsion.to_dict() if self.propulsion else None,
             "sensibilite": self.sensitivity.to_dict() if self.sensitivity else None,
             "pales": self.blades.to_dict() if self.blades else None,
@@ -326,7 +332,8 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     # Forme des aubes : une aube qui se referme sur elle-meme invalide tout ce
     # que la phase 4 en tirerait, la coupe la traversant deux fois.
     loops = loops_module.detect_looped_blades(
-        occupancy, topology.blades.n_blades, watertight=import_report.watertight
+        occupancy, topology.blades.n_blades, watertight=import_report.watertight,
+        mesh=aligned,
     )
     result.blade_loops = loops
     result.warnings.extend(loops.warnings)
@@ -641,6 +648,138 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     _fill_provenance(result, options)
     result.elapsed_s = time.time() - started
     return result
+
+
+def run_components(options: Options) -> AnalysisResult:
+    """Analyse en mode composants declares (SPEC v2).
+
+    Le mode d'import en vrac reste disponible et inchange : celui-ci s'ajoute a
+    cote.  La difference tient en une phrase -- l'outil cesse de deviner l'axe,
+    le nombre de pales, le type de roue et le cote d'aspiration, et se met a les
+    verifier.  Les grandeurs qui en decoulent changent donc de provenance, pas
+    seulement de valeur : la section d'entree est **mesuree** sur un solide au
+    lieu d'etre deduite de rayons fragiles, et le sens debitant est un vecteur
+    lu sur l'assemblage au lieu d'une convention.
+    """
+    started = time.time()
+    result = AnalysisResult(options=options)
+    declarations = components_module.Declarations(
+        mode=options.machine,
+        blade_topology=options.blade_topology,
+        n_blades=options.blades or 0,
+    )
+    assembly = components_module.assemble(
+        options.component_paths, declarations, unit=options.unit
+    )
+    result.assembly = assembly
+    result.warnings.extend(assembly.warnings)
+    result.confidence.update(assembly.confidence)
+
+    blocked = assembly.blocked()
+    if blocked is not None:
+        result.warnings.insert(0, f"analyse interrompue : {blocked.detail}")
+        result.confidence.cap_all(LOW)
+        result.elapsed_s = time.time() - started
+        return result
+
+    # La geometrie de la roue, batie sur ce qui a ete mesure et declare plutot
+    # que sur ce qui a ete devine.
+    result.topology = _topology_from_components(assembly)
+    result.confidence.update(result.topology.confidence)
+    result.warnings.extend(result.topology.warnings)
+
+    # §5.1 : le sens debitant etant mesure, le sens de rotation se deduit.
+    result.blades = blade_module.BladeGeometry()
+    sign, raison = components_module.rotation_from_flow(assembly)
+    if options.rotation is not None:
+        result.blades.rotation_sign = 1 if options.rotation > 0 else -1
+        result.blades.forced_rotation = True
+        result.confidence.set("sens_de_rotation", HIGH)
+    elif sign:
+        result.blades.rotation_sign = sign
+        result.confidence.set("sens_de_rotation", HIGH)
+        result.provenance.set("sens_de_rotation", MESURE)
+    else:
+        result.confidence.set("sens_de_rotation", LOW)
+        result.warnings.append(raison)
+    result.blades.rotation_label = blade_module.rotation_label(result.blades.rotation_sign)
+    result.blades.observed_rotation_sign = sign
+    result.blades.observed_rotation_label = blade_module.rotation_label(sign)
+    if sign:
+        result.blades.notes.append(raison)
+
+    _fill_provenance(result, options)
+    for quantity in ("nombre_de_pales", "type_de_roue", "cote_aspiration", "axe"):
+        result.provenance.set(quantity, DECLARE)
+    if options.rotation is not None:
+        result.provenance.set("sens_de_rotation", DECLARE)
+    elif sign:
+        result.provenance.set("sens_de_rotation", MESURE)
+    for quantity in ("sections", "rayon_de_moyeu"):
+        result.provenance.set(quantity, MESURE)
+    result.elapsed_s = time.time() - started
+    return result
+
+
+def _topology_from_components(
+    assembly: components_module.ComponentAssembly,
+) -> topology_module.Topology:
+    """Batit la topologie a partir des pieces, sans rien inferer.
+
+    Les sections d'entree et de sortie viennent des solides fluide, mesurees
+    comme `volume / epaisseur` : elles cessent d'etre suspendues a la detection
+    de `r_1s` et `r_1h`, dont la fragilite est la cause premiere des ecarts de
+    debit.  Les rayons, eux, sont lus sur les memes solides -- une couronne
+    donne directement son rayon interieur et son rayon exterieur.
+    """
+    topology = topology_module.Topology()
+    axis = assembly.axis_origin
+    inlet = assembly.components[components_module.SLOT_INLET]
+    outlet = assembly.components[components_module.SLOT_OUTLET]
+    blade = assembly.components[components_module.SLOT_BLADE]
+
+    topology.r_1h, topology.r_1s = inlet.radial_extent(axis)
+    topology.r_2h, topology.r_2s = outlet.radial_extent(axis)
+    topology.r_1 = math.sqrt((topology.r_1s ** 2 + topology.r_1h ** 2) / 2.0)
+    topology.r_2 = math.sqrt((topology.r_2s ** 2 + topology.r_2h ** 2) / 2.0)
+    topology.r_aspiration = topology.r_1s
+    topology.r_tip = max(inlet.radial_extent(axis)[1], outlet.radial_extent(axis)[1],
+                         blade.radial_extent(axis)[1])
+    topology.r_blade_tip = blade.radial_extent(axis)[1]
+
+    # Mesurees, non deduites : c'est tout l'apport du mode composants.
+    topology.area_1 = assembly.inlet.area if assembly.inlet else 0.0
+    topology.area_2 = assembly.outlet.area if assembly.outlet else 0.0
+
+    hub = assembly.component(components_module.SLOT_HUB)
+    if hub is not None:
+        topology.hub_kind = topology_module.HUB_SOLID
+        topology.r_1h = max(topology.r_1h, hub.radial_extent(axis)[1])
+        topology.confidence.set("rayon_de_moyeu", HIGH)
+    else:
+        topology.hub_kind = (
+            topology_module.HUB_BORE if topology.r_1h > 0.0 else topology_module.HUB_NONE
+        )
+        topology.bore_radius = topology.r_1h
+        topology.confidence.set("rayon_de_moyeu", MEDIUM)
+        topology.notes.append(
+            "aucun STL de moyeu fourni : r1h est le rayon interieur du solide d'entree, ce qui "
+            "le confond avec le percement de la veine. Importez le moyeu pour lever le doute."
+        )
+
+    topology.blades.n_blades = assembly.declarations.n_blades
+    topology.blades.forced = True
+    topology.machine_type = (
+        topology_module.AXIAL if assembly.declarations.mode == MACHINE_PROPELLER
+        else topology_module.CENTRIFUGAL
+    )
+    topology.ratio_r2_r1s = (
+        topology.r_blade_tip / topology.r_1s if topology.r_1s > 0.0 else 0.0
+    )
+    topology.b_2 = topology.r_2s - topology.r_2h
+    for quantity in ("rayons", "sections", "nombre_de_pales", "type_de_roue", "axe"):
+        topology.confidence.set(quantity, HIGH)
+    return topology
 
 
 def _fill_provenance(result: AnalysisResult, options: Options) -> None:

@@ -215,6 +215,20 @@ PROPULSION_SPEED_MAX = 350.0  # m/s - vitesse d'avance au-dela de laquelle l'ent
 ADVANCE_SWEEP_POINTS = 41  # points du balayage du parametre d'avance J
 ADVANCE_SWEEP_MARGIN = 1.20  # - - borne haute du balayage, en fraction du J de poussee nulle
 
+GENUS_DAMAGE_MAX = 0.01  # - - part d'aretes de bord au-dela de laquelle le genre topologique n'est plus lisible : chaque dechirure fabrique une anse, et un maillage troue a 5 % rend deja un genre de 185 la ou une piece a peine ouverte en rend 6
+GENUS_PER_BLADE_MAX = 3.0  # - - genre maximal admis par pale pour qu'une lecture toroidale soit plausible : une boucle vaut une anse, trois laissent la marge des conges et des raccords
+
+# ---------------------------------------------------------------------------
+# Import par composants declares (SPEC v2)
+# ---------------------------------------------------------------------------
+SLICE_THICKNESS_MAX = 0.05  # m - epaisseur au-dela de laquelle un solide fluide n'est plus une tranche mince mais un tube, qui ne dit plus ou est la section de reference
+SLICE_ANISOTROPY_MIN = 2.0  # - - rapport minimal entre les deux plus grandes valeurs propres d'inertie et la plus petite, pour qu'une tranche ait une normale isolee
+RECENTRE_TOLERANCE = 0.01  # - - fraction du rayon exterieur en deca de laquelle un centroide colle a l'origine trahit une piece recentree a l'export (SPEC v2 6.1)
+OVERLAP_TOLERANCE = 0.05  # - - recouvrement admis entre boites englobantes de composants, en fraction du plus petit volume (SPEC v2 6.2)
+BLADE_COPY_CLEARANCE = 0.0  # m - jeu minimal exige entre deux copies de pale voisines ; zero, seul le recoupement compte
+DECLARED_BLADES_MIN = 2  # nombre de pales declarable minimal (SPEC v2 2)
+DECLARED_BLADES_MAX = 24  # nombre de pales declarable maximal (SPEC v2 2)
+
 # ---------------------------------------------------------------------------
 # Domaine des entrees : bornes au-dela desquelles les modeles ne valent plus
 # ---------------------------------------------------------------------------

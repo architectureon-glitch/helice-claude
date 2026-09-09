@@ -8,6 +8,7 @@ import os
 
 from .. import config
 from ..analysis import AnalysisResult
+from .. import components as components_module
 from ..geometry import topology as topology_module
 from . import plot, viewer
 
@@ -312,6 +313,66 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
             f"depuis {check.rpm_reference:.0f} tr/min : **{check.worst_deviation * 100.0:.2f} %** "
             f"(seuil {config.SIMILARITY_TOL * 100.0:.0f} %) - {verdict}."
         )
+        lines.append("")
+
+    assembly = result.assembly
+    if assembly is not None:
+        lines.append("## Import par composants declares")
+        lines.append("")
+        lines.append(
+            "Les pieces ont ete importees separement, et l'outil n'a rien infere de ce qui "
+            "suit : le modele hydraulique, la topologie de pale et le nombre de pales sont "
+            "**declares**, l'axe vient du contrat d'export, les sections viennent des solides "
+            "fluide. Il les a verifies."
+        )
+        lines.append("")
+        lines.extend(_markdown_table(
+            ["Declaration", "Valeur"],
+            [
+                ["Modele hydraulique", assembly.declarations.mode],
+                ["Topologie de pale", assembly.declarations.blade_topology],
+                ["Nombre de pales", str(assembly.declarations.n_blades)],
+            ],
+        ))
+        lines.append("")
+        lines.extend(_markdown_table(
+            ["Piece", "Triangles", "Volume (cm3)", "Rayons int./ext. (mm)"],
+            [
+                [
+                    piece.slot,
+                    str(len(piece.mesh.faces) if piece.mesh else 0),
+                    f"{piece.volume * 1e6:.1f}",
+                    "{:.1f} / {:.1f}".format(
+                        *[r * config.MM_PER_M for r in piece.radial_extent(assembly.axis_origin)]
+                    ),
+                ]
+                for piece in assembly.components.values()
+            ],
+        ))
+        lines.append("")
+        if assembly.inlet and assembly.outlet:
+            lines.append(
+                f"Sections **mesurees** sur les tranches fluide, `volume / epaisseur` : "
+                f"A1 = {assembly.inlet.area * 1e4:.2f} cm2, "
+                f"A2 = {assembly.outlet.area * 1e4:.2f} cm2. Elles ne dependent plus de la "
+                "detection de r1s et r1h, dont la fragilite est la cause premiere des ecarts "
+                "de debit. Sens debitant mesure : "
+                f"({', '.join(f'{c:+.2f}' for c in assembly.flow_direction)})."
+            )
+            lines.append("")
+        lines.append("### Ce que l'outil a verifie")
+        lines.append("")
+        lines.extend(_markdown_table(
+            ["Controle", "Resultat", "Detail"],
+            [
+                [check.name,
+                 "conforme" if check.passed else ("**BLOQUANT**" if check.blocking else "reserve"),
+                 check.detail]
+                for check in assembly.checks
+            ],
+        ))
+        lines.append("")
+        lines.append(f"> {components_module.EXPORT_CONTRACT}")
         lines.append("")
 
     sensitivity = result.sensitivity
