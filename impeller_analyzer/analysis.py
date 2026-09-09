@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from . import config
 from .confidence import HIGH, LOW, ConfidenceMap, worst
+from .provenance import DECLARE, DEFAUT, ProvenanceMap
 from .geometry import axis as axis_module
 from .geometry import blade_angles as blade_module
 from .geometry import blade_loops as loops_module
@@ -25,9 +26,24 @@ from .hydraulics import energy as energy_module
 from .hydraulics import losses as losses_module
 from .hydraulics import meanline as meanline_module
 from .hydraulics import propulsion as propulsion_module
+from .hydraulics import sensitivity as sensitivity_module
 from .hydraulics import similarity as similarity_module
 from .io import loader
 from .mesh import TriMesh
+
+
+#: Modele hydraulique retenu. `auto` laisse la classification geometrique
+#: decider ; les deux autres priment sur elle, parce que l'utilisateur a la
+#: piece sous les yeux et la geometrie, elle, peut se tromper.
+MACHINE_AUTO = "auto"
+MACHINE_PUMP = "pompe_carenee"
+MACHINE_PROPELLER = "helice_libre"
+MACHINE_MODELS = (MACHINE_AUTO, MACHINE_PUMP, MACHINE_PROPELLER)
+
+#: Famille de roue, declarable de la meme facon.
+WHEEL_AUTO = "auto"
+WHEEL_TYPES = (WHEEL_AUTO, topology_module.AXIAL, topology_module.MIXED,
+               topology_module.CENTRIFUGAL)
 
 
 @dataclass
@@ -41,6 +57,8 @@ class Options:
     beta1_deg: float | None = None
     beta2_deg: float | None = None
     rotation: int | None = None  # +1 anti-horaire, -1 horaire, None : a indiquer
+    machine: str = MACHINE_AUTO  # modele hydraulique : auto, pompe carenee, ou helice libre
+    wheel_type: str = WHEEL_AUTO  # famille de roue declaree ; prime sur la classification
     propulsion_speed: float | None = None  # m/s - vitesse d'avance en helice libre ; None : pas d'analyse propulsive
     fluid: str = "eau"  # fluide de l'analyse propulsive : "eau" ou "air"
     altitude: float = config.ALTITUDE
@@ -108,6 +126,16 @@ class Options:
                 f"utilise pour la pression barometrique vaut de 0 a "
                 f"{config.ALTITUDE_MAX:g} m."
             )
+        if self.machine not in MACHINE_MODELS:
+            raise ValueError(
+                f"modele hydraulique inconnu : '{self.machine}'. Attendu : "
+                f"{', '.join(MACHINE_MODELS)}."
+            )
+        if self.wheel_type not in WHEEL_TYPES:
+            raise ValueError(
+                f"type de roue inconnu : '{self.wheel_type}'. Attendu : "
+                f"{', '.join(WHEEL_TYPES)}."
+            )
         if self.propulsion_speed is not None and not 0.0 <= self.propulsion_speed <= config.PROPULSION_SPEED_MAX:
             raise ValueError(
                 f"vitesse d'avance hors domaine : {self.propulsion_speed:g} m/s. Attendu entre 0 "
@@ -134,6 +162,8 @@ class Options:
             "beta1_impose_deg": self.beta1_deg,
             "beta2_impose_deg": self.beta2_deg,
             "sens_de_rotation_impose": self.rotation,
+            "modele_hydraulique": self.machine,
+            "type_de_roue_impose": self.wheel_type,
             "vitesse_d_avance_m_s": self.propulsion_speed,
             "fluide": self.fluid,
             "cote_aspiration": self.suction,
@@ -161,6 +191,7 @@ class AnalysisResult:
     blade_loops: loops_module.LoopResult | None = None
     blade_normals: normals_module.NormalAngles | None = None
     propulsion: propulsion_module.PropulsionResult | None = None
+    sensitivity: sensitivity_module.SensitivityReport | None = None
     meanline_input: meanline_module.MeanlineInput | None = None
     curves: list[meanline_module.PerformanceCurve] = field(default_factory=list)
     head_sensitivity: float = 0.0  # ecart relatif de hauteur pour +/- 1 deg sur beta2
@@ -173,6 +204,7 @@ class AnalysisResult:
     mesh: TriMesh | None = None
     warnings: list[str] = field(default_factory=list)
     confidence: ConfidenceMap = field(default_factory=ConfidenceMap)
+    provenance: ProvenanceMap = field(default_factory=ProvenanceMap)
     elapsed_s: float = 0.0
 
     def overall_confidence(self) -> str:
@@ -198,6 +230,7 @@ class AnalysisResult:
             "forme_des_aubes": self.blade_loops.to_dict() if self.blade_loops else None,
             "angles_par_normales": self.blade_normals.to_dict() if self.blade_normals else None,
             "propulsion": self.propulsion.to_dict() if self.propulsion else None,
+            "sensibilite": self.sensitivity.to_dict() if self.sensitivity else None,
             "pales": self.blades.to_dict() if self.blades else None,
             "sens_de_sortie_du_liquide": self.discharge,
             "installation": self.installation.to_dict() if self.installation else None,
@@ -205,6 +238,7 @@ class AnalysisResult:
             "similitude": self.similarity.to_dict() if self.similarity else None,
             "vitesse_maximale": self.speed_limit.to_dict() if self.speed_limit else None,
             "confiance": dict(self.confidence),
+            "provenance": dict(self.provenance),
             "confiance_globale": self.overall_confidence(),
             "avertissements": list(self.warnings),
             "incertitude_du_modele": {
@@ -268,6 +302,22 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
         forced_blades=options.blades,
         r_aspiration_cm=options.r_aspiration_cm,
     )
+    # Le type de roue declare prime sur la classification geometrique. Celle-ci
+    # repose sur le rapport r2/r1s, qui suppose un canal meridien conventionnel
+    # entre moyeu et carter : sur une aube en boucle il n'y en a pas, et le
+    # critere repond avec aplomb une valeur fausse. L'utilisateur, lui, a la
+    # piece sous les yeux.
+    if options.wheel_type != WHEEL_AUTO:
+        if options.wheel_type != topology.machine_type:
+            topology.notes.append(
+                f"type de roue impose : {options.wheel_type}. La geometrie, elle, lisait "
+                f"{topology.machine_type} (rapport r2/r1s = {topology.ratio_r2_r1s:.2f}). "
+                "C'est le type impose qui est retenu."
+            )
+        topology.machine_type = options.wheel_type
+        topology.confidence.set("type_de_roue", HIGH)
+        result.confidence.set("type_de_roue", HIGH)
+
     result.topology = topology
     result.warnings.extend(topology.warnings)
     result.warnings.extend(topology.blades.warnings)
@@ -280,6 +330,27 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     )
     result.blade_loops = loops
     result.warnings.extend(loops.warnings)
+
+    # Les criteres de classification -- rapport r2/r1s, solidite, largeur de
+    # sortie -- supposent tous un canal meridien conventionnel, borde par le
+    # moyeu et le carter, que le fluide traverse une fois. Une aube en boucle
+    # n'en a pas : la meme coupe rencontre deux fois la pale, et les rayons qui
+    # nourrissent le rapport ne designent plus ce que le critere croit. La
+    # classification garde sa valeur -- il faut bien en publier une -- mais
+    # cesse de pouvoir etre affirmee.
+    if loops.looped and options.wheel_type == WHEEL_AUTO:
+        # Sur le resultat autant que sur la topologie : la table de confiance
+        # publiee a deja ete recopiee depuis celle-ci, plus haut.
+        topology.confidence.set("type_de_roue", LOW)
+        result.confidence.set("type_de_roue", LOW)
+        result.warnings.append(
+            f"aubes en boucle : la classification geometrique repond « {topology.machine_type} » "
+            f"sur un rapport r2/r1s de {topology.ratio_r2_r1s:.2f}, mais ce critere suppose un "
+            "canal meridien conventionnel entre moyeu et carter, qu'une aube en boucle n'a pas. "
+            "La confiance sur le type de roue est donc abaissee. Si vous connaissez la piece, "
+            "declarez-la par --type-de-roue ; et --machine choisit directement le modele "
+            "hydraulique, sans passer par cette classification."
+        )
 
     # Phase 4 : coupes, angles de pale, sens de rotation.
     sections = sections_module.extract_sections(aligned, occupancy, topology)
@@ -488,6 +559,31 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
             result.warnings.extend(result.channel_losses.warnings)
 
         result.head_sensitivity = meanline_module.head_sensitivity(data, curves[0].rpm)
+
+        # Sensibilite complete : hauteur, debit et NPSHr, contre beta1, beta2 et
+        # le diametre. Ce que le modele annonce comme incertitude suppose la
+        # geometrie juste ; ce tableau-la mesure ce qu'une erreur de lecture
+        # ferait vraiment, et declasse ce qui ne tient pas.
+        result.sensitivity = sensitivity_module.analyse(data, curves[0].rpm)
+        sensitivity_module.apply(result.sensitivity, result.confidence)
+        result.warnings.extend(result.sensitivity.warnings)
+        for row in result.sensitivity.rows:
+            if not row.alarming():
+                continue
+            # Pas `worst` : ce nom est celui de la fonction de propagation de
+            # confiance importee plus haut, et Python le rendrait local a toute
+            # la fonction.
+            pire = row.worst_per_degree()
+            combien = (
+                "suffit a faire disparaitre le point de fonctionnement"
+                if not math.isfinite(pire) else f"la deplace de {pire:.0%}"
+            )
+            result.warnings.append(
+                f"{row.quantity} tres sensible a la geometrie : un degre d'ecart sur les angles "
+                f"de pale {combien}, au-dela du seuil de "
+                f"{config.SENSITIVITY_LOW_PER_DEG:.0%} par degre. La confiance sur cette "
+                "grandeur est abaissee a faible : lisez-la comme un ordre de grandeur."
+            )
         if result.head_sensitivity > config.BETA_SENSITIVITY_ALERT:
             # Le texte dit « ordres de grandeur » : la table de confiance doit
             # dire la meme chose, sans quoi le lecteur croit l'une des deux.
@@ -515,16 +611,77 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     # Phase propulsive, sur demande. Elle ne remplace pas l'analyse de pompe :
     # elle repond a une autre question -- la meme piece tournant en helice libre,
     # non carenee -- et le module refuse de repondre si la roue n'est pas axiale.
-    if options.propulsion_speed is not None:
+    # Le mode helice libre se declare, il ne se deduit pas. Il etait conditionne
+    # a la classification geometrique, ce qui le fermait des que celle-ci se
+    # trompait -- exactement le cas d'une helice a aubes en boucle, lue
+    # « centrifuge » parce que son rapport de rayons y ressemble.
+    declared = options.machine == MACHINE_PROPELLER
+    refused = options.machine == MACHINE_PUMP
+    wanted = options.propulsion_speed is not None or declared
+    if wanted and not refused:
         result.propulsion = propulsion_module.analyse(
             topology,
             geometry,
             rpm=max(options.speeds) if options.speeds else 0.0,
-            speed=options.propulsion_speed,
+            # Sans vitesse d'avance, une helice declaree libre est analysee a
+            # l'arret : la poussee statique est une grandeur utile en soi.
+            speed=options.propulsion_speed if options.propulsion_speed is not None else 0.0,
             fluid=options.fluid,
+            forced=declared,
         )
         result.warnings.extend(result.propulsion.warnings)
         result.confidence.set("propulsion", result.propulsion.confidence)
+    elif refused and options.propulsion_speed is not None:
+        result.warnings.append(
+            "une vitesse d'avance est demandee, mais la machine est declaree pompe carenee : "
+            "l'analyse en helice libre n'est pas faite. Otez --machine pompe_carenee, ou "
+            "declarez --machine helice_libre."
+        )
 
+    _fill_provenance(result, options)
     result.elapsed_s = time.time() - started
     return result
+
+
+def _fill_provenance(result: AnalysisResult, options: Options) -> None:
+    """Dit, grandeur par grandeur, si la valeur publiee est lue ou declaree.
+
+    Le niveau de confiance repond « a quel point est-ce sur » ; la provenance
+    repond « d'ou cela vient ». Une valeur imposee en ligne de commande peut
+    etre parfaitement sure sans rien devoir au maillage, et la lire comme une
+    mesure serait se tromper sur ce que l'outil a fait.
+    """
+    provenance = result.provenance
+    provenance.declare("type_de_roue", options.wheel_type != WHEEL_AUTO)
+    provenance.declare("modele_hydraulique", options.machine != MACHINE_AUTO)
+    provenance.declare("nombre_de_pales", options.blades is not None)
+    provenance.declare(
+        "angles_de_pale", options.beta1_deg is not None and options.beta2_deg is not None
+    )
+    # Le sens de rotation non impose n'est pas « mesure » : l'outil refuse
+    # justement de le trancher, et publie « a indiquer ». Le marquer mesure
+    # laisserait croire a une lecture qui n'a pas eu lieu.
+    provenance.set(
+        "sens_de_rotation", DECLARE if options.rotation is not None else DEFAUT
+    )
+    provenance.declare("rayon_d_aspiration", options.r_aspiration_cm is not None)
+    provenance.declare("cote_aspiration", options.suction != axis_module.SUCTION_AUTO)
+    for quantity in ("rayons", "rayon_de_moyeu", "rayon_de_sortie", "sections",
+                     "volume", "axe", "maillage"):
+        provenance.declare(quantity, False)
+    # Un seul des deux angles impose : la valeur publiee melange une declaration
+    # et une lecture, ce que ni « declare » ni « mesure » ne decrit. On retient
+    # la moins engageante des deux.
+    if (options.beta1_deg is None) != (options.beta2_deg is None):
+        provenance.set("angles_de_pale", DEFAUT)
+    # Les conditions de site ne sont jamais mesurees : elles viennent de la
+    # ligne de commande ou de config.
+    provenance.set(
+        "installation",
+        DECLARE if any((
+            options.altitude != config.ALTITUDE,
+            options.temperature_c != config.TEMPERATURE,
+            options.suction_height != config.HAUTEUR_ASPIRATION,
+            options.suction_losses != config.PERTES_ASPIRATION,
+        )) else DEFAUT,
+    )

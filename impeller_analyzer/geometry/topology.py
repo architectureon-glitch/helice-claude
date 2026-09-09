@@ -15,6 +15,11 @@ from ..mesh import TriMesh, rotation_matrix
 from .occupancy import OccupancyMap
 from .proximity import hausdorff_distance
 
+#: Ce qu'on trouve au centre de la piece, et qui n'est pas la meme chose.
+HUB_SOLID = "moyeu plein"  # de la matiere pleine depuis l'axe : un vrai moyeu
+HUB_BORE = "alesage traversant"  # un trou de part en part : pas de moyeu, mais pas de passage non plus
+HUB_NONE = "ni moyeu ni alesage"  # rien de continu au centre : le fluide y passe
+
 AXIAL = "axiale"
 MIXED = "mixte"
 CENTRIFUGAL = "centrifuge"
@@ -56,6 +61,8 @@ class Topology:
     z_1: float = 0.0
     r_1s: float = 0.0
     r_1h: float = 0.0
+    hub_kind: str = HUB_NONE  # moyeu plein, alesage traversant, ou ni l'un ni l'autre
+    bore_radius: float = 0.0  # rayon interieur de la matiere quand il y a un alesage
     r_1: float = 0.0
     r_aspiration: float = 0.0
     r_aspiration_source: str = "detecte"  # "detecte" ou "utilisateur"
@@ -72,6 +79,7 @@ class Topology:
     rotation_ambiguity: str = ""  # reserve sur le sens, a taire si l'utilisateur l'a donne
     confidence: ConfidenceMap = field(default_factory=ConfidenceMap)
     warnings: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)  # remarques qui n'appellent pas d'action
 
     def to_dict(self) -> dict:
         """Vue serialisable en JSON (grandeurs en SI)."""
@@ -85,6 +93,8 @@ class Topology:
             "z_1_m": self.z_1,
             "r_1s_m": self.r_1s,
             "r_1h_m": self.r_1h,
+            "nature_du_centre": self.hub_kind,
+            "rayon_d_alesage_m": self.bore_radius or None,
             "r_1_m": self.r_1,
             "r_aspiration_m": self.r_aspiration,
             "r_aspiration_source": self.r_aspiration_source,
@@ -202,6 +212,60 @@ def _hub_index(row: list[float]) -> int:
         else:
             break
     return last
+
+
+def _inner_material_index(row: list[float]) -> int:
+    """Plus petit index radial ou il y a de la matiere ; -1 si la rangee est vide."""
+    for ir, value in enumerate(row):
+        if value > config.F_MATIERE:
+            return ir
+    return -1
+
+
+def hub_nature(occupancy: OccupancyMap, blade_rows: list[int], iz_1: int) -> tuple[str, int]:
+    """Ce que la piece porte en son centre, et le rayon qui va avec.
+
+    Trois cas, qu'il ne faut pas confondre parce qu'ils ne se comportent pas
+    pareil dans la section d'entree :
+
+    * **moyeu plein** -- de la matiere pleine depuis l'axe.  `r_1h` est le rayon
+      du moyeu, et `A1 = pi (r_1s^2 - r_1h^2)` retire bien ce que le moyeu
+      occupe.
+    * **alesage traversant** -- un trou de part en part, pour l'arbre ou pour le
+      montage.  Il n'y a pas de moyeu plein, mais le trou n'est pas non plus une
+      section de passage : le fluide n'y circule pas.  Rendre zero serait
+      exact au sens du critere du moyeu et **faux** au sens hydraulique, car
+      `A1` compterait alors le trou comme du passage et gonflerait le debit.
+      `r_1h` vaut donc le rayon interieur de la matiere.
+    * **ni l'un ni l'autre** -- rien de continu au centre : le fluide y passe
+      vraiment, et `r_1h` vaut zero.
+
+    Renvoie `(nature, index radial)`.  L'alesage n'est reconnu que s'il traverse :
+    un evidement borgne, lui, laisse de la matiere en face et se voit sur les
+    autres rangees.
+
+    La question porte sur ce qui **obstrue l'entree**, et se tranche donc au plan
+    d'entree `iz_1`.  Un plateau arriere de roue centrifuge est bien du plein
+    depuis l'axe, mais il est a l'autre bout de la piece et n'obstrue rien a
+    l'aspiration : le compter donnerait un rayon de moyeu superieur au rayon
+    d'oeillard, et une section `A1 = pi (r_1s^2 - r_1h^2)` negative.  Seule la
+    reconnaissance de l'**alesage** regarde toute la hauteur, puisqu'un alesage
+    n'en est un que s'il traverse.
+    """
+    rows = [occupancy.f[iz] for iz in blade_rows] or occupancy.f
+    rows = [row for row in rows if _outer_index(row) >= 0]
+    if not rows:
+        return HUB_NONE, -1
+
+    hub = _hub_index(occupancy.f[iz_1])
+    if hub >= 0:
+        return HUB_SOLID, hub
+
+    interieurs = [_inner_material_index(row) for row in rows]
+    if all(index > 0 for index in interieurs):
+        # Aucune rangee ne porte de matiere sur l'axe : le vide central traverse.
+        return HUB_BORE, min(interieurs)
+    return HUB_NONE, -1
 
 
 def _outer_index(row: list[float]) -> int:
@@ -371,9 +435,33 @@ def characteristic_radii(occupancy: OccupancyMap) -> Topology:
 
     row_1 = occupancy.f[iz_1]
     outer_1 = _blade_outer_index(blade[iz_1], row_1)
-    hub_1 = _hub_index(row_1)
     topology.r_1s = occupancy.r_centres[outer_1] if outer_1 >= 0 else topology.r_tip
+
+    # Ce qu'il y a au centre : un moyeu plein, un alesage traversant, ou rien.
+    # Les deux premiers obstruent la section d'entree, le troisieme non -- et un
+    # alesage rendu comme un moyeu absent ferait compter le trou comme du
+    # passage, ce qui gonfle le debit d'autant.
+    topology.hub_kind, hub_1 = hub_nature(occupancy, blade_rows, iz_1)
     topology.r_1h = occupancy.r_centres[hub_1] if hub_1 >= 0 else 0.0
+    if topology.hub_kind == HUB_BORE:
+        topology.bore_radius = topology.r_1h
+        topology.confidence.set("rayon_de_moyeu", MEDIUM)
+        topology.notes.append(
+            f"aucun moyeu plein : la piece est percee de part en part, la matiere ne commence "
+            f"qu'a r = {topology.r_1h * config.MM_PER_M:.1f} mm. C'est ce rayon-la qui est publie "
+            "en r1h, et la section d'entree exclut le trou : le fluide n'y circule pas, et l'y "
+            "compter gonflerait le debit. Ce n'est pas un rayon de moyeu pour autant, d'ou la "
+            "confiance moyenne."
+        )
+    elif topology.hub_kind == HUB_NONE:
+        topology.confidence.set("rayon_de_moyeu", MEDIUM)
+        topology.notes.append(
+            "aucun moyeu plein ni alesage traversant : le centre est ouvert, r1h vaut zero et "
+            "toute la section interieure compte comme passage. Verifiez que la piece n'a pas "
+            "de moyeu que le maillage aurait perdu."
+        )
+    else:
+        topology.confidence.set("rayon_de_moyeu", HIGH)
 
     # Roue fermee : l'entree est le percement du flasque, pas le bout des pales.
     if topology.closed_impeller:

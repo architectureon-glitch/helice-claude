@@ -11,7 +11,14 @@ import argparse
 import sys
 
 from . import __version__, config
-from .analysis import Options, run
+from .analysis import (
+    MACHINE_AUTO,
+    MACHINE_MODELS,
+    WHEEL_AUTO,
+    WHEEL_TYPES,
+    Options,
+    run,
+)
 from .geometry import blade_angles
 from .io import loader, report
 
@@ -64,6 +71,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=list(config.DEFAULT_RPM),
         metavar="N",
         help="regimes analyses, en tr/min (defaut : %(default)s)",
+    )
+    parser.add_argument(
+        "--machine",
+        choices=list(MACHINE_MODELS),
+        default=MACHINE_AUTO,
+        help="modele hydraulique ; autre qu'auto, prime sur la classification geometrique "
+             "et selectionne directement le modele (defaut : %(default)s)",
+    )
+    parser.add_argument(
+        "--type-de-roue",
+        choices=list(WHEEL_TYPES),
+        default=WHEEL_AUTO,
+        help="famille de roue imposee ; prime sur la classification geometrique, "
+             "qui se trompe sur les aubes en boucle (defaut : %(default)s)",
     )
     parser.add_argument(
         "--vitesse-avance",
@@ -149,6 +170,8 @@ def options_from_args(args: argparse.Namespace) -> Options:
         beta2_deg=args.beta2,
         suction=args.aspiration,
         rotation=blade_angles.rotation_sign_from_name(args.rotation),
+        machine=args.machine,
+        wheel_type=args.type_de_roue,
         propulsion_speed=args.vitesse_avance,
         fluid=args.fluide,
         altitude=args.altitude,

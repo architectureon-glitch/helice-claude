@@ -347,9 +347,15 @@ def head_sensitivity(data: "MeanlineInput", rpm: float) -> float:
     n'importe quelle lecture geometrique -- peut deplacer la hauteur bien
     au-dela des 18 % annonces par le modele. Autant le mesurer et le dire.
 
-    Renvoie l'ecart relatif entre les hauteurs nominales obtenues a
-    `beta2 - 1 deg` et `beta2 + 1 deg`, rapporte a la hauteur centrale, et
-    l'infini si un degre suffit a faire disparaitre le point de fonctionnement.
+    Renvoie la variation relative de hauteur **par degre** : l'ecart entre les
+    hauteurs obtenues a `beta2 - 1 deg` et `beta2 + 1 deg`, rapporte a la
+    hauteur centrale, puis divise par les deux degres qui separent les deux
+    perturbations.  L'infini si un degre suffit a faire disparaitre le point de
+    fonctionnement.
+
+    La division par l'intervalle manquait : la valeur rendue etait l'ecart sur
+    deux degres, et le rapport l'annoncait comme l'effet d'un seul.  Elle
+    surestimait donc du facteur deux ce qu'elle decrivait.
     """
     import dataclasses
 
@@ -364,7 +370,9 @@ def head_sensitivity(data: "MeanlineInput", rpm: float) -> float:
             return math.inf
         heads.append(point.head)
     low, middle, high = heads
-    return abs(high - low) / middle if middle > 0.0 else math.inf
+    if middle <= 0.0:
+        return math.inf
+    return abs(high - low) / middle / (2.0 * config.BETA_SENSITIVITY_DEG)
 
 
 def confidence_of(topology: Topology, geometry: BladeGeometry) -> ConfidenceMap:

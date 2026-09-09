@@ -10,6 +10,7 @@ from helpers import BaseTestCase
 
 from impeller_analyzer import __version__, config, synthetic
 from impeller_analyzer.analysis import Options, run
+from impeller_analyzer import provenance as provenance_module
 from impeller_analyzer.cli import build_parser, main, options_from_args
 from impeller_analyzer.io import report, writer
 
@@ -118,7 +119,10 @@ class TestCommandLine(CliTestCase):
         self.assertClose(data["topologie"]["r_aspiration_m"], 0.045, rel=1e-12)
         self.assertEqual(data["topologie"]["r_aspiration_source"], "utilisateur")
         with open(os.path.join(self.out, report.MARKDOWN_NAME), encoding="utf-8") as handle:
-            self.assertIn("(impose)", handle.read())
+            # Le marquage « (impose) » colle au texte a cede la place a une
+            # colonne de provenance, qui vaut pour toutes les grandeurs.
+            markdown = handle.read()
+            self.assertIn("| Rayon d'aspiration r1s (mm) | 45.00 | declare |", markdown)
 
     def test_repli_manuel_sur_les_angles_et_les_pales(self):
         """--beta1, --beta2 et --blades remplacent l'extraction."""
@@ -194,10 +198,15 @@ class TestReportPieces(CliTestCase):
             Options(grid_nr=80, grid_nz=80, n_theta=360, symmetry_check=False, speeds=(1450.0,)),
         )
         geometry = report.geometry_table(result)
-        self.assertEqual(len(geometry), 8)
+        # Neuf lignes depuis que la nature du centre -- moyeu plein, alesage
+        # traversant, ou ni l'un ni l'autre -- est publiee a cote de r1h.
+        self.assertEqual(len(geometry), 9)
+        for row in geometry:
+            self.assertEqual(len(row), 4, "libelle, valeur, provenance, confiance")
         self.assertEqual(geometry[0][0], "Type de roue")
-        for _, _, level in geometry:
+        for _, _, source, level in geometry:
             self.assertIn(level, report.CONFIDENCE_LABELS.values())
+            self.assertIn(source, provenance_module.LABELS.values())
 
         header, rows = report.performance_table(result)
         self.assertEqual(header, ["1450 tr/min"])

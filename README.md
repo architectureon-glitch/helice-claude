@@ -463,6 +463,99 @@ Deux précisions de moindre portée :
   et non en pour-cent : 2 % n'a pas de sens sur un angle qui varie fortement le
   long de la pale.
 
+## Ce que l'outil déclare, et ce qu'il mesure
+
+Quatre corrections de la même famille : l'outil affirmait, à quelques endroits,
+plus qu'il ne savait.
+
+### Le type de machine se déclare
+
+Sur une hélice à aubes en boucle, la classification géométrique répondait
+« centrifuge » **en confiance haute**. C'était le seul endroit du programme où
+une valeur fausse était affirmée sans réserve — et cette erreur fermait le mode
+dont l'utilisateur avait besoin, l'analyse en hélice libre étant conditionnée à
+elle.
+
+Les critères de classification — rapport r2/r1s, solidité, largeur de sortie —
+supposent tous un canal méridien conventionnel, bordé par le moyeu et le carter,
+que le fluide traverse une fois. Une aube en boucle n'en a pas. La classification
+garde donc une valeur, il faut bien en publier une, mais **une topologie en
+boucle la fait passer en confiance faible d'elle-même**, avec l'invitation à
+déclarer.
+
+```bash
+--machine {auto, pompe_carenee, helice_libre}    # choisit le modèle hydraulique
+--type-de-roue {auto, axiale, mixte, centrifuge} # prime sur la classification
+```
+
+Le mode hélice libre ne dépend plus de la classification : `--machine
+helice_libre` l'ouvre quoi qu'en dise la géométrie, et `--machine pompe_carenee`
+le ferme même sur une roue lue axiale.
+
+### Alésage et moyeu ne sont pas la même chose
+
+Une pièce percée de part en part n'a pas de moyeu plein. Rendre `r1h = 0` était
+exact au sens du critère et **faux** au sens hydraulique : la valeur part dans
+`A1 = π(r1s² − r1h²)`, qui comptait alors le trou central comme section de
+passage. Sur la pièce d'essai, cela gonflait le débit de **38 %**.
+
+Trois cas sont maintenant distingués et nommés dans le tableau :
+
+| Nature du centre | r1h publié | Confiance |
+|---|---|---|
+| moyeu plein | rayon du moyeu, au plan d'entrée | haute |
+| alésage traversant | rayon intérieur de la matière | moyenne |
+| ni moyeu ni alésage | 0 | moyenne |
+
+La confiance tombe à *moyenne* dès qu'aucun moyeu plein n'est trouvé : un rayon
+intérieur de matière n'est pas un rayon de moyeu, et le dire serait abusif.
+
+La nature se tranche **au plan d'entrée**, pas sur toute la hauteur : le plateau
+arrière d'une roue centrifuge est bien du plein depuis l'axe, mais il n'obstrue
+rien à l'aspiration — le compter donnait un rayon intérieur supérieur au rayon
+d'œillard, et une section d'entrée négative.
+
+### Provenance : mesuré, déclaré, ou par défaut
+
+Le niveau de confiance dit *à quel point* une grandeur est sûre. Il ne dit pas
+*d'où* elle vient — et une valeur imposée en ligne de commande peut être
+parfaitement sûre sans rien devoir au maillage. Le tableau 1 porte donc une
+colonne de plus :
+
+| Grandeur | Valeur | Provenance | Confiance |
+|---|---|---|---|
+| Type de roue | axiale | déclaré | haute |
+| Rayon intérieur de matière r1h (mm) | 26.73 | mesuré | moyenne |
+| Nature du centre | alésage traversant | mesuré | moyenne |
+| Sens de rotation | horaire | déclaré | haute |
+
+Le `(imposé)` collé au sens de rotation a disparu de la valeur : la colonne le
+porte désormais pour toutes les grandeurs.
+
+### Sensibilité publiée, et non plus seulement signalée
+
+L'incertitude annoncée par le modèle — ±18 % sur la hauteur — suppose la
+géométrie juste. Un tableau mesure l'autre moitié de la question :
+
+| Grandeur | par degré de β1 | par degré de β2 | élasticité au diamètre |
+|---|---|---|---|
+| hauteur | 1.2 % | 0.6 % | 2.00 |
+| débit | 5.0 % | 0.0 % | 3.00 |
+| NPSHr | 2.9 % | 0.0 % | 2.00 |
+
+Au-delà de **30 % par degré**, la grandeur passe automatiquement en confiance
+faible — puissance et couple avec elle, puisqu'ils en dérivent.
+
+La colonne de droite est une élasticité sans dimension, `(dX/X)/(dD/D)`. Sa
+valeur est **connue d'avance** : les lois de similitude donnent 2 pour la
+hauteur, 3 pour le débit, 2 pour le NPSHr. Elle sert donc aussi de contrôle du
+modèle, et elle retombe dessus à 0.01 près.
+
+Corrigé au passage : `head_sensitivity` divisait par un intervalle de **deux**
+degrés tout en annonçant l'effet d'**un seul**. Elle surestimait donc du facteur
+deux ce qu'elle décrivait. Le seuil d'alerte a été ramené de 18 % à 9 % pour que
+le déclenchement reste identique.
+
 ## En hélice libre : poussée, et le plafond qui juge le rendement
 
 Les phases 5 et 6 traitent la roue en **pompe** : carénée, refoulant dans une
@@ -702,9 +795,9 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-238 tests : une phase par module, le banc d'audit qui balaie des roues entières
-et confronte chaque grandeur relue au dessin, et les invariants de l'analyse en
-hélice libre. Ils passent aussi sous
+258 tests : une phase par module, le banc d'audit qui balaie des roues entières
+et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
+hélice libre, et ce que l'outil a le droit d'affirmer. Ils passent aussi sous
 `pytest` si vous l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture

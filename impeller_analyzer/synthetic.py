@@ -523,9 +523,19 @@ def toroidal_propeller(
     thickness: float = 0.003,
     hub_height: float = 0.060,
     hub_segments: int = 180,
+    bore_radius: float = 0.0,
 ) -> TriMesh:
-    """Helice a aubes toroidales : un moyeu et `n_blades` boucles fermees."""
-    parts = [cylinder(r_hub, hub_height, hub_segments)]
+    """Helice a aubes toroidales : un moyeu et `n_blades` boucles fermees.
+
+    `bore_radius` perce le moyeu de part en part, comme le fait le passage
+    d'arbre d'une helice reelle.  La piece n'a alors plus de moyeu **plein** :
+    le centre est vide, mais ce vide n'est pas une section de passage pour
+    autant, et l'outil doit distinguer les deux.
+    """
+    if bore_radius > 0.0:
+        parts = [tube(bore_radius, r_hub, hub_height, hub_segments)]
+    else:
+        parts = [cylinder(r_hub, hub_height, hub_segments)]
     for k in range(n_blades):
         parts.append(toroidal_blade(
             r_hub * 0.8, r_tip, amplitude, wrap_deg, width, thickness,

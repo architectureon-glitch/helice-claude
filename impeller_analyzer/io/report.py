@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 
 from .. import config
 from ..analysis import AnalysisResult
+from ..geometry import topology as topology_module
 from . import plot, viewer
 
 JSON_NAME = "resultats.json"
@@ -48,18 +50,30 @@ def _fallback(value):
 
 
 def _rotation_cell(blades) -> str:
-    """Case du sens de rotation : ce qui est retenu, et ce que la geometrie suggere."""
+    """Case du sens de rotation : ce qui est retenu, et ce que la geometrie suggere.
+
+    Le « (impose) » d'autrefois a disparu de la valeur : c'est la colonne de
+    provenance qui porte desormais cette information, pour toutes les grandeurs
+    et pas seulement celle-ci.
+    """
     if blades is None:
         return "-"
     if blades.forced_rotation:
-        return f"{blades.rotation_label} (impose)"
+        return blades.rotation_label
     if blades.observed_rotation_sign:
         return f"**{blades.rotation_label}** -- suggere : {blades.observed_rotation_label}"
     return blades.rotation_label or "indetermine"
 
 
-def geometry_table(result: AnalysisResult) -> list[tuple[str, str, str]]:
-    """Tableau 1 de la SPEC : geometrie extraite."""
+def geometry_table(result: AnalysisResult) -> list[tuple[str, str, str, str]]:
+    """Tableau 1 de la SPEC : geometrie extraite, avec provenance et confiance.
+
+    La provenance repond a une autre question que la confiance : celle-ci dit a
+    quel point la valeur est sure, celle-la d'ou elle vient.  Une valeur imposee
+    en ligne de commande peut etre parfaitement sure sans rien devoir au
+    maillage, et la lire comme une mesure serait se tromper sur ce que l'outil a
+    fait.  Le « (impose) » du sens de rotation faisait deja cela pour lui seul.
+    """
     topology = result.topology
     blades = result.blades
     if topology is None or blades is None:
@@ -70,29 +84,31 @@ def geometry_table(result: AnalysisResult) -> list[tuple[str, str, str]]:
     outlet = discharge.get("composante_meridienne", "-")
     if alpha is not None:
         outlet = f"{outlet}, alpha2 = {alpha:.1f} deg"
-    suffix = " (impose)" if topology.r_aspiration_source == "utilisateur" else ""
+    source = result.provenance
+    hub_label = {
+        topology_module.HUB_SOLID: "Rayon de moyeu r1h (mm)",
+        topology_module.HUB_BORE: "Rayon interieur de matiere r1h (mm)",
+    }.get(topology.hub_kind, "Rayon interieur r1h (mm)")
+
+    def row(label: str, value: str, quantity: str) -> tuple[str, str, str, str]:
+        """Une ligne du tableau : libelle, valeur, provenance, confiance."""
+        return (label, value, source.label(quantity), _confidence(confidence.get_level(quantity)))
+
     return [
-        ("Type de roue", topology.machine_type, _confidence(confidence.get_level("type_de_roue"))),
-        (
-            "Nombre de pales",
-            str(topology.blades.n_blades) + (" (impose)" if topology.blades.forced else ""),
-            _confidence(confidence.get_level("nombre_de_pales")),
-        ),
-        ("Rayon d'aspiration r1s (mm)", _mm(topology.r_1s) + suffix, _confidence(confidence.get_level("rayons"))),
-        ("Rayon moyeu r1h (mm)", _mm(topology.r_1h), _confidence(confidence.get_level("rayons"))),
-        ("Rayon de sortie r2 (mm)", _mm(topology.r_2), _confidence(confidence.get_level("rayons"))),
-        (
+        row("Type de roue", topology.machine_type, "type_de_roue"),
+        row("Nombre de pales", str(topology.blades.n_blades), "nombre_de_pales"),
+        row("Rayon d'aspiration r1s (mm)", _mm(topology.r_1s), "rayon_d_aspiration"
+            if topology.r_aspiration_source == "utilisateur" else "rayons"),
+        row(hub_label, _mm(topology.r_1h), "rayon_de_moyeu"),
+        row("Nature du centre", topology.hub_kind, "rayon_de_moyeu"),
+        row("Rayon de sortie r2 (mm)", _mm(topology.r_2), "rayons"),
+        row(
             "beta1 / beta2 au rayon moyen (deg)",
-            f"{_deg(blades.beta1_deg)} / {_deg(blades.beta2_deg)}"
-            + (" (imposes)" if blades.forced_beta else ""),
-            _confidence(confidence.get_level("angles_de_pale")),
+            f"{_deg(blades.beta1_deg)} / {_deg(blades.beta2_deg)}",
+            "angles_de_pale",
         ),
-        (
-            "Sens de rotation",
-            _rotation_cell(blades),
-            _confidence(confidence.get_level("sens_de_rotation")),
-        ),
-        ("Sens de sortie du liquide", outlet, _confidence(confidence.get_level("sens_de_rotation"))),
+        row("Sens de rotation", _rotation_cell(blades), "sens_de_rotation"),
+        row("Sens de sortie du liquide", outlet, "sens_de_rotation"),
     ]
 
 
@@ -154,7 +170,10 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
     lines.append("")
     table = geometry_table(result)
     if table:
-        lines.extend(_markdown_table(["Grandeur", "Valeur", "Confiance"], [list(row) for row in table]))
+        lines.extend(_markdown_table(
+            ["Grandeur", "Valeur", "Provenance", "Confiance"],
+            [list(row) for row in table],
+        ))
     else:
         lines.append("_Geometrie non exploitable._")
     lines.append("")
@@ -293,6 +312,40 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
             f"depuis {check.rpm_reference:.0f} tr/min : **{check.worst_deviation * 100.0:.2f} %** "
             f"(seuil {config.SIMILARITY_TOL * 100.0:.0f} %) - {verdict}."
         )
+        lines.append("")
+
+    sensitivity = result.sensitivity
+    if sensitivity is not None and sensitivity.rows:
+        lines.append("## Sensibilite des resultats a la geometrie")
+        lines.append("")
+        lines.append(
+            "L'incertitude annoncee par le modele suppose la geometrie juste. Ce tableau mesure "
+            "l'autre moitie de la question : ce qu'une erreur de lecture ferait vraiment. Les "
+            "deux premieres colonnes se lisent **par degre** d'erreur sur l'angle de pale. La "
+            "troisieme est une elasticite sans dimension : les lois de similitude en donnent la "
+            "valeur attendue -- 2 pour la hauteur, 3 pour le debit, 2 pour le NPSHr -- et elle "
+            f"sert donc aussi de controle. Au-dela de {config.SENSITIVITY_LOW_PER_DEG:.0%} par "
+            "degre, la grandeur passe automatiquement en confiance faible."
+        )
+        lines.append("")
+
+        def _cell(value: float, suffix: str = " %") -> str:
+            if not math.isfinite(value):
+                return "**non definie**"
+            return f"{value * 100.0:.1f}{suffix}" if suffix else f"{value:.2f}"
+
+        lines.extend(_markdown_table(
+            ["Grandeur", "par degre de beta1", "par degre de beta2", "elasticite au diametre"],
+            [
+                [
+                    row.quantity + (" **(declassee)**" if row.alarming() else ""),
+                    _cell(row.beta1),
+                    _cell(row.beta2),
+                    _cell(row.diameter, ""),
+                ]
+                for row in sensitivity.rows
+            ],
+        ))
         lines.append("")
 
     propulsion = result.propulsion

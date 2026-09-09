@@ -477,6 +477,7 @@ def analyse(
     rpm: float,
     speed: float,
     fluid: str = "eau",
+    forced: bool = False,
 ) -> PropulsionResult:
     """Analyse propulsive d'une helice libre a `rpm` et a la vitesse `speed`.
 
@@ -493,15 +494,25 @@ def analyse(
     result.n_blades = max(1, geometry.n_effective_blades or topology.blades.n_blades)
     result.disk_area = math.pi * (r_tip ** 2 - topology.r_1h ** 2)
 
-    if topology.machine_type != AXIAL:
+    if topology.machine_type != AXIAL and not forced:
         result.confidence = LOW
         result.warnings.append(
-            f"la roue est de type {topology.machine_type} : le modele d'helice libre ne "
-            "s'applique pas. Il suppose un ecoulement axial traversant un disque non carene, "
-            "alors qu'une roue centrifuge ou mixte refoule radialement dans une volute. "
-            "Poussee et rendement propulsif ne sont pas calcules."
+            f"la roue est lue de type {topology.machine_type} : le modele d'helice libre ne "
+            "s'applique pas de lui-meme. Il suppose un ecoulement axial traversant un disque "
+            "non carene, alors qu'une roue centrifuge ou mixte refoule radialement dans une "
+            "volute. Poussee et rendement propulsif ne sont pas calcules. Si la piece est bien "
+            "une helice, declarez-la par --machine helice_libre : la classification "
+            "geometrique se trompe sur les aubes en boucle."
         )
         return result
+    if forced and topology.machine_type != AXIAL:
+        result.confidence = MEDIUM
+        result.notes.append(
+            f"helice libre declaree alors que la geometrie lit « {topology.machine_type} ». "
+            "C'est la declaration qui est retenue, mais les rayons et les cordes sur lesquels "
+            "le bilan de pale s'appuie viennent de cette meme lecture : verifiez-les au "
+            "tableau 1."
+        )
 
     result.stations = blade_stations(topology, geometry)
     if not result.stations:

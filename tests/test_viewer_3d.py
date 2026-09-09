@@ -82,7 +82,8 @@ class TestPayload(ViewerTestCase):
     def test_tableaux_et_carte(self):
         """La page embarque les memes tableaux que le rapport, et la carte meridienne."""
         payload = viewer.build_payload(self.result)
-        self.assertEqual(len(payload["tables"]["geometry"]), 8)
+        # Neuf lignes : la nature du centre s'ajoute a r1h.
+        self.assertEqual(len(payload["tables"]["geometry"]), 9)
         self.assertEqual(payload["tables"]["speeds"], ["1450 tr/min"])
         self.assertTrue(payload["carte"].startswith("data:image/png;base64,"))
         json.dumps(payload, allow_nan=False)  # doit etre serialisable tel quel
