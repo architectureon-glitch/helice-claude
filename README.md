@@ -5,7 +5,8 @@ fichier 3D : géométrie extraite, sens de rotation requis, sens de sortie du
 liquide, performances à plusieurs régimes, NPSH requis et vitesse maximale
 avant cavitation.
 
-Le cahier des charges complet est dans [`SPEC.md`](SPEC.md).
+Le cahier des charges complet est dans [`SPEC.md`](SPEC.md) ; son extension,
+l'import par composants déclarés, dans [`SPEC_V2.md`](SPEC_V2.md).
 
 ## Installation
 
@@ -555,8 +556,9 @@ les N−1 autres sont reconstruites par rotation.
 > Z pour axe, en centimètres.
 
 C'est ce contrat qui remplace la détection d'axe et le recentrage. Le fichier
-d'essai réel se trouve à **23,8 m de l'origine CAO** — et c'est normal, c'est là
-que la CAO l'avait mis. Le contrat fixe la *direction* de l'axe, pas sa position :
+d'essai réel, [`examples/Drawing1.stl`](examples/Drawing1.stl), se trouve à
+**29,5 m de l'origine CAO** (x = 23,8 m, y = 17,5 m) — et c'est normal, c'est
+là que la CAO l'avait mis. Le contrat fixe la *direction* de l'axe, pas sa position :
 celle-ci est mesurée sur les solides fluide, qui sont des couronnes centrées
 dessus.
 
@@ -914,6 +916,34 @@ il ne faut pas caler un modèle sur un chiffre non sourcé.
 fiche technique est disponible, ainsi que les cotes de sa roue, les mettre dans
 `examples/cas_de_reference.json`, relancer la validation, puis recaler
 `K_FROTTEMENT_REL` (et au besoin `ETA_H`) sur cet écart.
+
+### Le fichier d'essai réel
+
+[`examples/Drawing1.stl`](examples/Drawing1.stl) est la seule géométrie non
+synthétique du dépôt : une hélice à cinq aubes en boucle, exportée d'AutoCAD en
+centimètres, à 29,5 m de l'origine CAO. Elle sert de banc, pas de cas de
+référence : aucune performance mesurée ne l'accompagne.
+
+```bash
+python -m impeller_analyzer examples/Drawing1.stl --type-de-roue axiale
+```
+
+| Grandeur | Mesurée hors de l'outil | Lue par l'outil |
+|---|---|---|
+| Triangles | 29 598 | 29 598 |
+| Arêtes de bord après réparation | 60 | 60 |
+| Aire de surface | 5 839 cm² | 5 839,4 cm² |
+| Volume | 640 cm³ | 640,2 cm³ |
+| Nombre de pales | 5 | 5, confiance haute |
+| Topologie | toroïdale | toroïdale, genre 6 |
+| Diamètre | 267,2 mm | 270,5 mm (+1,2 %) |
+| Rayon intérieur de matière | 26,7 mm | **37,4 mm — écart non résolu** |
+
+Le dernier écart n'a pas été réglé en ajustant l'outil : aucun sommet du
+maillage n'approche l'axe à moins de 37 mm, quel que soit le centrage retenu. La
+valeur de référence vaut exactement le dixième du diamètre de référence, ce qui
+ressemble à une cote dérivée plutôt que mesurée. Elle reste à vérifier sur la
+pièce.
 
 ## Calage
 

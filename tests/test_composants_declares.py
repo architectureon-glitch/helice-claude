@@ -22,7 +22,8 @@ from impeller_analyzer.analysis import MACHINE_PROPELLER, Options, run_component
 from impeller_analyzer.io import writer
 from impeller_analyzer.mesh import TriMesh
 
-#: La piece reelle est exportee a 23.8 m de l'origine CAO. On reproduit l'ecart.
+#: La piece reelle est exportee en (23.8, 17.5) m, soit a 29.5 m de l'origine
+#: CAO. On reproduit l'ecart.
 ORIGINE_CAO = (23.8, 17.5, 0.0)
 
 
@@ -135,7 +136,7 @@ class TestPlansFluide(ComposantsTestCase):
         """Le contrat fixe la direction de l'axe, pas sa position.
 
         Une piece exportee sans recentrage est la ou la CAO l'avait mise -- a
-        23.8 m de l'origine dans le cas reel. Mesurer les rayons depuis
+        29.5 m de l'origine dans le cas reel. Mesurer les rayons depuis
         l'origine y donnerait des dizaines de metres.
         """
         assembly = components.assemble(self.pieces(), self.declarations())
