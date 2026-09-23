@@ -1,0 +1,513 @@
+"""Angles de pale lus sur une pale isolee (SPEC v2, 5.2 ; cahier C3.3 et C3.4).
+
+En import global, la cambrure se lit mal : la coupe traverse plusieurs pales,
+qu'il faut segmenter, et une aube en boucle la traverse deux fois. Une pale
+importee **seule** leve les deux difficultes : chaque surface de courant la
+coupe selon un profil, dont la ligne moyenne donne l'angle de pale.
+
+Surfaces de courant. Sur une roue a refoulement radial, l'eau traverse les
+aubes en s'eloignant de l'axe, dans des plans quasi perpendiculaires a celui-ci :
+la surface de courant est le plan `z = constante`, et le profil se lit dans le
+plan `(r, theta)`. L'angle de pale, mesure depuis la direction tangentielle, vaut
+
+    beta = atan2(1, -s . r . dtheta/dr)
+
+ou `s` est le signe de la rotation (+1 anti-horaire vu de +Z). Une aube courbee
+vers l'arriere -- son bout trainant derriere son pied -- a beta < 90 degres ;
+une aube radiale, 90 ; une aube courbee vers l'avant, plus de 90.
+
+Aubes en boucle. Les niveaux se regroupent en **brins** selon le sens de leur
+recul : une aube conventionnelle en a un, une aube en boucle deux, qui reculent
+en sens opposes et se rejoignent pres du plan ou ils changent de sens. Chaque
+brin est traite comme une grille d'aubes a part entiere, avec son bord d'attaque,
+son bord de fuite et sa deviation ; ils ne sont pas fusionnes. Les niveaux de la
+jonction, ou le profil revient sur lui-meme, sont ecartes : on n'y lit pas de
+ligne moyenne.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+
+from .. import config
+from ..confidence import LOW, MEDIUM
+from ..mesh import TriMesh
+from .meridian import MeridianWalls
+
+Vec3 = tuple[float, float, float]
+
+
+@dataclass
+class LevelProfile:
+    """Profil de la pale dans un plan `z` : ligne moyenne et angles de bord."""
+
+    z: float = 0.0
+    r_min: float = 0.0
+    r_max: float = 0.0
+    sweep: float = 0.0  # dtheta/dr moyen, rad/m
+    beta_le_deg: float = 0.0  # au bord interieur (attaque, ecoulement centrifuge)
+    beta_te_deg: float = 0.0  # au bord exterieur (fuite)
+    usable: bool = True
+    discharges: bool | None = None  # un chemin mene-t-il du bord de fuite a la fente de sortie
+    free_le: bool | None = None  # le bout interieur est-il un bord d'attaque libre (et non un pied)
+
+
+@dataclass
+class Branch:
+    """Un brin : suite de niveaux qui reculent dans le meme sens."""
+
+    name: str = ""
+    levels: list[LevelProfile] = field(default_factory=list)
+    beta_le_deg: float = 0.0
+    beta_te_deg: float = 0.0
+    backward: bool = True  # courbe vers l'arriere pour le sens de rotation retenu
+
+    @property
+    def du(self) -> str:
+        """Le nom precede de sa preposition : « de l'aube », « du brin bas »."""
+        return "de l'aube" if self.name == "aube" else f"du {self.name}"
+
+    @property
+    def z_mean(self) -> float:
+        return sum(level.z for level in self.levels) / len(self.levels) if self.levels else 0.0
+
+    @property
+    def discharging(self) -> int:
+        """Nombre de niveaux dont le bord de fuite debouche vers la sortie."""
+        return sum(1 for level in self.levels if level.discharges)
+
+    @property
+    def deviation_deg(self) -> float:
+        """Deviation de la grille : ecart entre angle de fuite et angle d'attaque."""
+        return self.beta_te_deg - self.beta_le_deg
+
+    def to_dict(self) -> dict:
+        return {
+            "brin": self.name,
+            "niveaux": len(self.levels),
+            "z_moyen_m": self.z_mean,
+            "beta_attaque_deg": self.beta_le_deg,
+            "beta_fuite_deg": self.beta_te_deg,
+            "deviation_deg": self.deviation_deg,
+            "courbe_vers_l_arriere": self.backward,
+            "niveaux_debouchant_vers_la_sortie": self.discharging,
+        }
+
+
+@dataclass
+class IsolatedBladeAngles:
+    """Angles publies, et ce qui les porte."""
+
+    beta1_deg: float = 0.0
+    beta2_deg: float = 0.0
+    branches: list[Branch] = field(default_factory=list)
+    levels: list[LevelProfile] = field(default_factory=list)
+    working: Branch | None = None  # le brin qui refoule dans la fente de sortie
+    r_le: float = 0.0  # m, rayon moyen du bord d'attaque du brin refoulant
+    r_te: float = 0.0  # m, rayon moyen du bord de fuite du brin refoulant
+    r_te_range: tuple[float, float] = (0.0, 0.0)
+    beta1_spread: tuple[float, float] = (0.0, 0.0)
+    beta2_spread: tuple[float, float] = (0.0, 0.0)
+    layout: str = ""  # disposition des brins : parallele, un_seul_refoule, indeterminee
+    layout_detail: str = ""
+    walls: bool = False  # les parois ont-elles servi a dire ou l'eau sort
+    confidence: str = LOW
+    warnings: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "beta1_deg": self.beta1_deg,
+            "beta1_min_max_deg": list(self.beta1_spread),
+            "beta2_deg": self.beta2_deg,
+            "brin_refoulant": self.working.name if self.working else None,
+            "rayon_d_attaque_m": self.r_le or None,
+            "rayon_de_fuite_m": self.r_te or None,
+            "rayon_de_fuite_min_max_m": list(self.r_te_range),
+            "beta2_min_max_deg": list(self.beta2_spread),
+            "disposition_des_brins": self.layout or None,
+            "parois_consultees": self.walls,
+            "brins": [branch.to_dict() for branch in self.branches],
+            "niveaux_lus": sum(1 for level in self.levels if level.usable),
+            "niveaux_ecartes": sum(1 for level in self.levels if not level.usable),
+            "confiance": self.confidence,
+        }
+
+
+def _slope(pairs: list[tuple[float, float]]) -> float:
+    """Pente de la regression lineaire de y sur x."""
+    n = float(len(pairs))
+    if n < 2:
+        return 0.0
+    mx = sum(x for x, _ in pairs) / n
+    my = sum(y for _, y in pairs) / n
+    var = sum((x - mx) ** 2 for x, _ in pairs)
+    if var <= 0.0:
+        return 0.0
+    return sum((x - mx) * (y - my) for x, y in pairs) / var
+
+
+def blade_angle(r: float, dtheta_dr: float, rotation_sign: int) -> float:
+    """Angle de pale depuis la tangente, en degres : < 90 courbee vers l'arriere."""
+    return math.degrees(math.atan2(1.0, -rotation_sign * r * dtheta_dr))
+
+
+def _loops(segments, tolerance: float) -> list[list[tuple[float, float]]]:
+    """Chaine les segments d'une coupe en contours fermes."""
+    def key(p):
+        return (round(p[0] / tolerance), round(p[1] / tolerance))
+
+    neighbours: dict = {}
+    where: dict = {}
+    for a, b in segments:
+        ka, kb = key(a), key(b)
+        if ka == kb:
+            continue
+        neighbours.setdefault(ka, []).append(kb)
+        neighbours.setdefault(kb, []).append(ka)
+        where[ka], where[kb] = a, b
+    seen: set = set()
+    loops = []
+    for start in neighbours:
+        if start in seen:
+            continue
+        loop, previous, current = [start], None, start
+        seen.add(start)
+        while True:
+            options = [k for k in neighbours[current] if k != previous and k not in seen]
+            if not options:
+                break
+            previous, current = current, options[0]
+            seen.add(current)
+            loop.append(current)
+        if len(loop) >= 3:
+            loops.append([where[k] for k in loop])
+    return loops
+
+
+def _side_theta(side: list[tuple[float, float]], r: float) -> float | None:
+    """Azimut d'une face du profil au rayon `r` (interpolation lineaire)."""
+    for (r0, t0), (r1, t1) in zip(side, side[1:]):
+        if (r0 - r) * (r1 - r) <= 0.0 and r0 != r1:
+            return t0 + (t1 - t0) * (r - r0) / (r1 - r0)
+    return None
+
+
+def level_profile(mesh: TriMesh, axis: Vec3, z: float, rotation_sign: int) -> LevelProfile | None:
+    """Ligne moyenne du profil de la pale dans le plan `z`, et ses angles de bord.
+
+    Les segments de coupe sont chaines en un contour ferme, coupe en deux faces
+    entre son point le plus proche de l'axe (attaque) et le plus eloigne
+    (fuite). A chaque rayon, la ligne moyenne est au milieu des deux faces. Une
+    regression sur les points de coupe melangeait intrados, extrados et face
+    d'extremite : sur une aube de 4 mm a faible angle, la meme pale et son image
+    miroir donnaient 18 et 35 degres. Les angles de bord sont lus sur la ligne
+    moyenne, entre `CAMBER_EDGE_START` et `CAMBER_EDGE_END` de l'etendue radiale
+    depuis chaque bord : l'arrondi du bord lui-meme n'en dit rien. L'angle local
+    y est ajuste en droite et **extrapole au bord** : lu au milieu de la zone,
+    il glissait vers l'angle de l'autre bord d'un huitieme de l'ecart
+    beta2 - beta1, soit 5 degres sur beta2 pour la roue d'essai hel1.
+    """
+    segments = []
+    for a, b, c in mesh.triangles():
+        cut = []
+        for p, q in ((a, b), (b, c), (c, a)):
+            dp, dq = p[2] - z, q[2] - z
+            if (dp > 0.0) != (dq > 0.0):
+                t = dp / (dp - dq)
+                cut.append((p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])))
+        if len(cut) == 2:
+            segments.append((cut[0], cut[1]))
+    if len(segments) < config.ISOLATED_MIN_POINTS:
+        return None
+    lo, hi = mesh.bounds()
+    loops = _loops(segments, 1e-7 * max(hi[0] - lo[0], hi[1] - lo[1], 1e-9))
+    if not loops:
+        return None
+    loop = max(loops, key=len)
+    polar = []
+    for x, y in loop:
+        r, theta = math.hypot(x - axis[0], y - axis[1]), math.atan2(y - axis[1], x - axis[0])
+        if polar:
+            previous = polar[-1][1]
+            theta = previous + (theta - previous + math.pi) % (2.0 * math.pi) - math.pi
+        polar.append((r, theta))
+    i_le = min(range(len(polar)), key=lambda i: polar[i][0])
+    i_te = max(range(len(polar)), key=lambda i: polar[i][0])
+    r_min, r_max = polar[i_le][0], polar[i_te][0]
+    span = r_max - r_min
+    if span <= 0.0:
+        return None
+    n = len(polar)
+    # Deux faces, chacune de l'attaque vers la fuite.
+    face_a = [polar[(i_le + k) % n] for k in range((i_te - i_le) % n + 1)]
+    face_b = [polar[(i_le - k) % n] for k in range((i_le - i_te) % n + 1)]
+    # Le contour n'encercle pas l'axe : les deux faces partagent la meme
+    # determination de l'azimut au bord d'attaque.
+    shift = face_b[0][1] - face_a[0][1]
+    face_b = [(r, t - shift) for r, t in face_b]
+
+    camber = []
+    steps = config.CAMBER_STATIONS
+    for k in range(1, steps):
+        r = r_min + span * k / steps
+        ta, tb = _side_theta(face_a, r), _side_theta(face_b, r)
+        if ta is None or tb is None:
+            return None
+        camber.append((r, 0.5 * (ta + tb)))
+    profile = LevelProfile(z=z, r_min=r_min, r_max=r_max, sweep=_slope(camber))
+    # Angle local de la ligne moyenne, par differences centrees.
+    local = [
+        (b[0], blade_angle(b[0], (c[1] - a[1]) / (c[0] - a[0]), rotation_sign))
+        for a, b, c in zip(camber, camber[1:], camber[2:])
+    ]
+    near_le = [p for p in local if config.CAMBER_EDGE_START * span <= p[0] - r_min <= config.CAMBER_EDGE_END * span]
+    near_te = [p for p in local if config.CAMBER_EDGE_START * span <= r_max - p[0] <= config.CAMBER_EDGE_END * span]
+    if len(near_le) < 2 or len(near_te) < 2:
+        return None
+    profile.beta_le_deg = _extrapolate(near_le, r_min)
+    profile.beta_te_deg = _extrapolate(near_te, r_max)
+    return profile
+
+
+def _extrapolate(pairs: list[tuple[float, float]], x: float) -> float:
+    """Valeur en `x` de la droite des moindres carres de y sur x."""
+    mx = sum(p[0] for p in pairs) / len(pairs)
+    my = sum(p[1] for p in pairs) / len(pairs)
+    return my + _slope(pairs) * (x - mx)
+
+
+def read_isolated_blade(
+    mesh: TriMesh,
+    axis: Vec3,
+    rotation_sign: int,
+    outlet_z: tuple[float, float],
+    inlet_z: float,
+    toroidal: bool,
+    walls: MeridianWalls | None = None,
+    outlet_radius: float = 0.0,
+) -> IsolatedBladeAngles:
+    """Angles d'une pale isolee a refoulement radial.
+
+    `outlet_z` : etendue axiale de la fente de sortie, `outlet_radius` son rayon.
+    `inlet_z` : cote du plan d'entree. `walls` : les parois de la roue dans le
+    plan meridien ; avec elles, on sait quels bords de fuite debouchent vers la
+    fente et quels bouts de profil sont des bords libres plutot que des pieds.
+    """
+    result = IsolatedBladeAngles()
+    lo, hi = mesh.bounds()
+    count = config.ISOLATED_LEVELS
+    for k in range(count):
+        z = lo[2] + (k + 0.5) * (hi[2] - lo[2]) / count
+        profile = level_profile(mesh, axis, z, rotation_sign)
+        if profile is not None:
+            result.levels.append(profile)
+    if not result.levels:
+        result.warnings.append("aucune coupe exploitable de la pale isolee : angles non lus")
+        return result
+
+    # Niveaux sans ligne moyenne lisible :
+    # - les pointes de la boucle, profils de quelques millimetres dont les
+    #   bords ne portent pas d'angle ;
+    # - la jonction des brins, ou le profil fait un crochet : les deux niveaux
+    #   qui encadrent un changement de sens de recul, et tout niveau dont le
+    #   recul moyen s'effondre.
+    widest = max(level.r_max - level.r_min for level in result.levels)
+    typical = sorted(abs(level.sweep) for level in result.levels)[len(result.levels) // 2]
+    for level in result.levels:
+        if (level.r_max - level.r_min) < config.TIP_SPAN_FRACTION * widest:
+            level.usable = False
+        if abs(level.sweep) < config.JUNCTION_SWEEP_FRACTION * typical:
+            level.usable = False
+    for first, second in zip(result.levels, result.levels[1:]):
+        if (first.sweep > 0.0) != (second.sweep > 0.0):
+            first.usable = second.usable = False
+    usable = [level for level in result.levels if level.usable]
+    if not usable:
+        result.warnings.append("aucun niveau de la pale n'a de recul net : angles non lus")
+        return result
+
+    # Brins : suites contigues de niveaux de meme sens de recul.
+    for level in usable:
+        sign = 1 if level.sweep > 0.0 else -1
+        if not result.branches or (1 if result.branches[-1].levels[-1].sweep > 0.0 else -1) != sign:
+            result.branches.append(Branch())
+        result.branches[-1].levels.append(level)
+    result.branches = [b for b in result.branches if len(b.levels) >= config.BRANCH_MIN_LEVELS]
+    ordered = sorted(result.branches, key=lambda b: b.z_mean)
+    for index, branch in enumerate(ordered):
+        if len(ordered) == 1:
+            branch.name = "aube"
+        elif len(ordered) == 2:
+            branch.name = ("brin bas", "brin haut")[index]
+        else:
+            branch.name = f"brin {index + 1}"
+        branch.beta_le_deg = sum(l.beta_le_deg for l in branch.levels) / len(branch.levels)
+        branch.beta_te_deg = sum(l.beta_te_deg for l in branch.levels) / len(branch.levels)
+        branch.backward = -rotation_sign * branch.levels[0].sweep > 0.0
+    if not result.branches:
+        result.warnings.append("aucun brin assez etendu pour y lire des angles")
+        return result
+
+    if toroidal and len(result.branches) < 2:
+        result.warnings.append(
+            f"pale declaree toroidale, mais ses coupes ne montrent qu'un seul sens de recul : "
+            "les deux brins d'une boucle devraient reculer en sens opposes. Les angles sont lus "
+            "sur l'aube comme sur une aube conventionnelle."
+        )
+    if not toroidal and len(result.branches) > 1:
+        result.warnings.append(
+            f"pale declaree conventionnelle, mais ses coupes montrent {len(result.branches)} sens "
+            "de recul opposes : c'est la signature d'une aube en boucle."
+        )
+
+    # Ou l'eau sort. Avec les parois, on cherche pour chaque niveau un chemin
+    # de son bord de fuite a la fente, qui peut longer une paroi mais ne revient
+    # jamais vers l'axe ; sans elles, on s'en tient a la hauteur de la fente.
+    def in_slot(level: LevelProfile) -> bool:
+        return outlet_z[0] <= level.z <= outlet_z[1]
+
+    meridian = walls is not None and outlet_radius > 0.0
+    result.walls = meridian
+    for branch in result.branches:
+        for level in branch.levels:
+            if meridian:
+                level.discharges = walls.reaches(level.r_max, level.z, outlet_radius, outlet_z)
+                level.free_le = walls.edge_is_free(level.r_min, level.z, inward=True)
+            else:
+                level.discharges = in_slot(level)
+
+    # Le brin qui refoule : celui dont le plus de niveaux debouchent. C'est lui,
+    # et lui seul, que le modele 1D peut decrire.
+    working = max(result.branches, key=lambda b: (
+        b.discharging, sum(1 for l in b.levels if in_slot(l)), -abs(b.z_mean - inlet_z)))
+    result.working = working
+    low_confidence = False
+
+    # Bord de fuite et bord d'attaque. Un plan horizontal n'est une surface de
+    # courant que la ou l'ecoulement est radial : pres de l'oeillard, le bout
+    # d'une coupe peut etre l'arete de la pale contre un flasque, et non un
+    # bord. Avec les parois, beta2 se lit sur les niveaux qui debouchent, beta1
+    # sur ceux dont le bout interieur est libre -- un bord incline est alors lu
+    # sur toute sa hauteur. Sans elles, sur les niveaux qui atteignent le rayon
+    # de sortie (resp. d'entree) de la pale.
+    r_te_max = max(l.r_max for l in working.levels)
+    r_le_min = min(l.r_min for l in working.levels)
+    exits = [l for l in working.levels if l.r_max >= (1.0 - config.EDGE_REACH) * r_te_max]
+    entries = [l for l in working.levels if l.r_min <= (1.0 + config.EDGE_REACH) * r_le_min]
+    if meridian:
+        debouchant = [l for l in working.levels if l.discharges]
+        libres = [l for l in working.levels if l.free_le]
+        if debouchant:
+            exits = debouchant
+        else:
+            low_confidence = True
+            result.warnings.append(
+                f"aucun niveau {working.du} ne trouve de chemin vers la fente de sortie : les "
+                "parois barrent tout. beta2 est lu au rayon de sortie de la pale, sans garantie "
+                "que l'eau y passe."
+            )
+        if libres:
+            entries = libres
+    result.r_te = sum(l.r_max for l in exits) / len(exits)
+    result.r_te_range = (min(l.r_max for l in exits), max(l.r_max for l in exits))
+    result.r_le = sum(l.r_min for l in entries) / len(entries)
+    result.beta2_deg = sum(l.beta_te_deg for l in exits) / len(exits)
+    result.beta1_deg = sum(l.beta_le_deg for l in entries) / len(entries)
+    working.beta_le_deg, working.beta_te_deg = result.beta1_deg, result.beta2_deg
+    # Le vrillage se juge sur les seuls niveaux qui portent le bord d'attaque :
+    # un plan qui coupe la pale plus loin de l'axe y lit un angle d'aval, et
+    # une aube sans vrillage passait pour vrillee de 20 degres.
+    le = [l.beta_le_deg for l in entries]
+    te = [l.beta_te_deg for l in exits]
+    result.beta1_spread = (min(le), max(le))
+    result.beta2_spread = (min(te), max(te))
+    mm = config.MM_PER_M
+    if max(le) - min(le) > config.LE_TWIST_WARN_DEG:
+        low_confidence = True
+        result.warnings.append(
+            f"le bord d'attaque {working.du} est tres vrille : beta d'attaque de "
+            f"{min(le):.0f} a {max(le):.0f} deg selon la hauteur"
+            + (f", de r = {min(l.r_min for l in entries) * mm:.0f} a "
+               f"{max(l.r_min for l in entries) * mm:.0f} mm" if len(entries) > 1 else "")
+            + f". beta1 = {result.beta1_deg:.1f} deg en est la moyenne ; aucun debit "
+            "d'adaptation unique ne convient a toute la hauteur de l'aube."
+        )
+    if max(te) - min(te) > config.LE_TWIST_WARN_DEG:
+        low_confidence = True
+        result.warnings.append(
+            f"le bord de fuite {working.du} est tres vrille : beta de fuite de "
+            f"{min(te):.0f} a {max(te):.0f} deg selon la hauteur, de r = "
+            f"{result.r_te_range[0] * mm:.0f} a {result.r_te_range[1] * mm:.0f} mm. beta2 = "
+            f"{result.beta2_deg:.1f} deg en est la moyenne sur la hauteur de la veine."
+        )
+    if outlet_radius > 0.0 and result.r_te < (1.0 - config.EDGE_REACH) * outlet_radius:
+        result.warnings.append(
+            f"le bord de fuite {working.du} est en moyenne a r = {result.r_te * mm:.1f} mm, la "
+            f"fente de sortie a {outlet_radius * mm:.1f} mm : entre les deux, une couronne sans "
+            "aube, ou l'eau conserve son moment cinetique. Pour la ligne moyenne, r2 est le "
+            "rayon du bord de fuite, pas celui de la fente."
+        )
+
+    # Disposition des brins : par ou l'eau les traverse.
+    others = [b for b in result.branches if b is not working]
+    if others:
+        def sens(branch: Branch) -> str:
+            return "l arriere" if branch.backward else "l avant"
+
+        courbure = "".join(
+            f" Pour le sens de rotation retenu, le {working.name} est courbe vers {sens(working)}"
+            f", le {other.name} vers {sens(other)}."
+            for other in others[:1] if other.backward != working.backward
+        )
+        if not meridian:
+            result.layout = "indeterminee"
+            result.layout_detail = (
+                f"aube en boucle a {len(result.branches)} brins : sans piece de paroi (moyeu ou "
+                "corps), l'outil ne peut dire si l'eau les traverse en serie ou en parallele. "
+                f"Les angles publies sont ceux du {working.name}, qui occupe le plus la hauteur "
+                f"de la fente de sortie.{courbure}"
+            )
+        elif all(2 * b.discharging >= len(b.levels) for b in others):
+            result.layout = "parallele"
+            result.layout_detail = (
+                f"aube en boucle a {len(result.branches)} brins, qui debouchent tous vers la "
+                f"fente de sortie : l'eau les traverse en parallele.{courbure} Le modele de "
+                f"ligne moyenne ne decrit qu'une grille d'aubes ; il est applique au "
+                f"{working.name}, dont le plus de niveaux debouchent, et l'apport des autres "
+                "brins ne s'y calcule pas."
+            )
+        else:
+            result.layout = "un_seul_refoule"
+            muets = [b for b in others if 2 * b.discharging < len(b.levels)]
+            result.layout_detail = (
+                f"aube en boucle a {len(result.branches)} brins, dont un seul refoule : le "
+                f"{working.name} debouche vers la fente de sortie, le "
+                f"{' et le '.join(b.name for b in muets)} non -- les parois barrent tout chemin "
+                "de son bord de fuite vers l'exterieur. L'eau venue de l'oeillard ne peut que le "
+                f"traverser pour gagner le {working.name} (en serie, en amont), ou tourner dans "
+                f"la cavite ou il loge.{courbure} Ni l'un ni l'autre ne se calcule en ligne "
+                "moyenne : la prerotation qu'il donne a l'eau et ses pertes par brassage ne sont "
+                "pas comptees, et ses angles, lus dans des plans que l'eau n'y suit pas, sont "
+                "indicatifs."
+            )
+
+    result.confidence = LOW if low_confidence else MEDIUM
+    for branch in result.branches:
+        result.notes.append(
+            f"{branch.name} ({len(branch.levels)} niveaux, z moyen "
+            f"{branch.z_mean * mm:.1f} mm) : beta d'attaque "
+            f"{branch.beta_le_deg:.1f} deg, de fuite {branch.beta_te_deg:.1f} deg, deviation "
+            f"{branch.deviation_deg:+.1f} deg ; courbe vers "
+            f"{'l arriere' if branch.backward else 'l avant'} pour le sens de rotation retenu"
+            + (f" ; {branch.discharging} niveau(x) sur {len(branch.levels)} debouchent vers la "
+               "fente de sortie." if meridian else ".")
+        )
+    ecartes = sum(1 for level in result.levels if not level.usable)
+    if ecartes:
+        result.notes.append(
+            f"{ecartes} niveau(x) ecarte(s) -- pointes de la boucle ou jonction des brins : le "
+            "profil y est trop court ou revient sur lui-meme, aucune ligne moyenne ne s'y lit."
+        )
+    return result

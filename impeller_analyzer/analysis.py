@@ -17,6 +17,7 @@ from . import components as components_module
 from .provenance import DECLARE, DEFAUT, MESURE, ProvenanceMap
 from .geometry import axis as axis_module
 from .geometry import blade_angles as blade_module
+from .geometry import blade_isolated as isolated_module
 from .geometry import blade_loops as loops_module
 from .geometry import blade_normals as normals_module
 from .geometry import occupancy as occupancy_module
@@ -219,6 +220,7 @@ class AnalysisResult:
     blade_loops: loops_module.LoopResult | None = None
     blade_normals: normals_module.NormalAngles | None = None
     assembly: components_module.ComponentAssembly | None = None
+    isolated_angles: isolated_module.IsolatedBladeAngles | None = None  # mode composants
     propulsion: propulsion_module.PropulsionResult | None = None
     sensitivity: sensitivity_module.SensitivityReport | None = None
     meanline_input: meanline_module.MeanlineInput | None = None
@@ -260,6 +262,9 @@ class AnalysisResult:
             "forme_des_aubes": self.blade_loops.to_dict() if self.blade_loops else None,
             "angles_par_normales": self.blade_normals.to_dict() if self.blade_normals else None,
             "composants": self.assembly.to_dict() if self.assembly else None,
+            "angles_sur_pale_isolee": (
+                self.isolated_angles.to_dict() if self.isolated_angles else None
+            ),
             "mode_d_import": "composants" if self.assembly else "vrac",
             "propulsion": self.propulsion.to_dict() if self.propulsion else None,
             "sensibilite": self.sensitivity.to_dict() if self.sensitivity else None,
@@ -883,6 +888,8 @@ def run_components(options: Options) -> AnalysisResult:
     if sign:
         result.blades.notes.append(raison)
 
+    _read_isolated_angles(result, assembly)
+
     _fill_provenance(result, options)
     for quantity in ("nombre_de_pales", "type_de_roue", "cote_aspiration", "axe"):
         result.provenance.set(quantity, DECLARE)
@@ -924,9 +931,11 @@ def _topology_from_components(
                          blade.radial_extent(axis)[1])
     topology.r_blade_tip = blade.radial_extent(axis)[1]
 
-    # Mesurees, non deduites : c'est tout l'apport du mode composants.
-    topology.area_1 = assembly.inlet.area if assembly.inlet else 0.0
-    topology.area_2 = assembly.outlet.area if assembly.outlet else 0.0
+    # Mesurees, non deduites : c'est tout l'apport du mode composants. La part
+    # d'un solide fluide qu'occupe une paroi n'est pas une section de passage
+    # (controle « passage libre ») : seule la part libre est retenue.
+    topology.area_1 = assembly.inlet.free_area if assembly.inlet else 0.0
+    topology.area_2 = assembly.outlet.free_area if assembly.outlet else 0.0
 
     # Refoulement radial : la sortie est une bande cylindrique, dont le rayon
     # est r2 et la hauteur b2. Lire b2 comme la largeur radiale d'une couronne
@@ -934,7 +943,7 @@ def _topology_from_components(
     if assembly.outlet is not None and assembly.outlet.radial:
         topology.r_2 = assembly.outlet.radius
         topology.r_2h = topology.r_2s = assembly.outlet.radius
-        topology.b_2 = assembly.outlet.height
+        topology.b_2 = assembly.outlet.free_height
     else:
         topology.b_2 = topology.r_2s - topology.r_2h
 
@@ -989,6 +998,92 @@ def _topology_from_components(
     for quantity in ("rayons", "sections", "nombre_de_pales", "type_de_roue", "axe"):
         topology.confidence.set(quantity, HIGH)
     return topology
+
+
+def _read_isolated_angles(
+    result: AnalysisResult, assembly: components_module.ComponentAssembly
+) -> None:
+    """Angles de pale lus sur la pale isolee (C3.3 et C3.4), roue a refoulement radial.
+
+    L'angle d'une pale se mesure depuis la tangente, **dans le sens oppose a la
+    rotation** : sans sens de rotation, on ne sait pas si une aube est courbee
+    vers l'arriere ou vers l'avant, et l'on ne publie rien plutot que de choisir.
+
+    Un angle impose par --beta1 ou --beta2 l'emporte sur la lecture, comme en
+    import en vrac ; la lecture reste publiee a cote, pour comparaison.
+    """
+    options = result.options
+    declared = (options.beta1_deg, options.beta2_deg)
+    blades = result.blades
+    if declared[0] is not None:
+        blades.beta1_deg = blade_module._clamp_beta(float(declared[0]))
+    if declared[1] is not None:
+        blades.beta2_deg = blade_module._clamp_beta(float(declared[1]))
+    both_declared = None not in declared
+    if both_declared:
+        blades.forced_beta = True
+        result.confidence.set("angles_de_pale", HIGH)
+
+    blade = assembly.component(components_module.SLOT_BLADE)
+    outlet = assembly.component(components_module.SLOT_OUTLET)
+    if blade is None or blade.mesh is None or assembly.outlet is None or assembly.inlet is None:
+        return
+    if not assembly.outlet.radial:
+        if not both_declared:
+            result.warnings.append(
+                "refoulement axial : les angles de pale se lisent sur des coupes cylindriques, "
+                "que le mode composants ne fait pas encore. Imposez --beta1 et --beta2."
+            )
+        return
+    sign = blades.rotation_sign
+    if not sign:
+        if not both_declared:
+            result.warnings.append(
+                "sens de rotation inconnu : l'angle d'une pale se mesure a l'oppose de la "
+                "rotation, et sans elle on ne sait pas si une aube est courbee vers l'arriere ou "
+                "vers l'avant. Declarez --rotation pour lire les angles."
+            )
+        return
+    toroidal = assembly.declarations.blade_topology == components_module.BLADE_TOROIDAL
+    angles = isolated_module.read_isolated_blade(
+        blade.mesh,
+        assembly.axis_origin,
+        sign,
+        (outlet.low[2], outlet.high[2]),
+        assembly.inlet.centroid[2],
+        toroidal,
+        walls=components_module.meridian(assembly),
+        outlet_radius=assembly.outlet.radius,
+    )
+    result.isolated_angles = angles
+    result.warnings.extend(angles.warnings)
+    blades.notes.extend(angles.notes)
+    if angles.working is None:
+        return
+    if declared[0] is None:
+        blades.beta1_deg = angles.beta1_deg
+    if declared[1] is None:
+        blades.beta2_deg = angles.beta2_deg
+    if not both_declared:
+        result.confidence.set("angles_de_pale", angles.confidence)
+    lecture = (
+        f"angles lus sur la pale isolee, coupes horizontales {angles.working.du} : "
+        f"beta1 = {angles.beta1_deg:.1f} deg a r = {angles.r_le * config.MM_PER_M:.1f} mm, "
+        f"beta2 = {angles.beta2_deg:.1f} deg a r = {angles.r_te * config.MM_PER_M:.1f} mm "
+        "(moyennes sur la hauteur des bords). "
+        "Un plan horizontal n'est la surface de courant que la ou l'ecoulement est radial : sur "
+        "des aubes synthetiques d'angles connus, la lecture est exacte a 0,1 degre dans une veine "
+        "plane, et basse de 2 a 4 degres dans une veine inclinee de 30 degres, que le plan coupe "
+        "en biais."
+    )
+    if declared != (None, None):
+        lecture += (
+            f" Valeurs retenues : beta1 = {blades.beta1_deg:.1f} deg, beta2 = "
+            f"{blades.beta2_deg:.1f} deg, les angles imposes l'emportant sur la lecture."
+        )
+    blades.notes.append(lecture)
+    if angles.layout_detail:
+        result.warnings.insert(0, angles.layout_detail)
 
 
 def _fill_provenance(result: AnalysisResult, options: Options) -> None:

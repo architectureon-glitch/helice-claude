@@ -576,7 +576,7 @@ dessus.
 | Nombre de pales | analyse de Fourier | déclaré |
 | Type de roue | classification géométrique | déclaré |
 
-### Les sept contrôles
+### Les huit contrôles
 
 Une déclaration est une entrée, jamais une dispense de contrôle. Deux sont
 **bloquants**. Le repère commun, parce que sa violation ne se voit sur aucune
@@ -586,10 +586,12 @@ distincts : le même fichier donné en entrée et en sortie rendait un sens déb
 nul, que la normalisation changeait sans bruit en +Z, et dont le sens de rotation
 était ensuite déduit.
 
-Les cinq autres avertissent sans annuler : interpénétration des boîtes, position
-de la pale entre les deux plans, nombre de pales trop grand pour l'étendue
-azimutale de la pale, topologie déclarée confrontée au **genre topologique**, et
-étanchéité.
+Les six autres avertissent sans annuler : interpénétration des pièces (mesurée en
+volume), position de la pale entre les deux plans, recouvrement des copies de la
+pale tournées de 2π/N, topologie déclarée confrontée au **genre topologique**,
+étanchéité, et **passage libre** : la part d'un solide fluide qu'occupe une paroi
+n'est pas une section de passage. L'aire retenue pour la suite est toujours la
+part libre ; le contrôle signale l'écart au-delà de 5 %.
 
 ### Ce que la première roue réelle a appris au mode composants
 
@@ -641,6 +643,67 @@ affirmaient trop :
   en confiance haute. Aube en boucle : le sens reste à déclarer. Refoulement radial :
   il se lit sur le recul des aubes, en confiance moyenne, l'hypothèse d'aubes
   courbées vers l'arrière étant dite.
+
+### Les angles d'une pale importée seule
+
+En import global, la cambrure se lit mal : la coupe traverse plusieurs pales et
+une aube en boucle la traverse deux fois. Importée seule, la pale lève les deux
+difficultés. Sur une roue à refoulement radial, le plan z = constante est la
+surface de courant ; chaque plan coupe la pale selon un profil fermé, coupé en
+deux faces entre son point le plus proche de l'axe et le plus éloigné, et la
+ligne moyenne est prise à mi-chemin des deux faces. L'angle de pale se mesure
+depuis la tangente, **à l'opposé de la rotation** : sans sens de rotation, rien
+n'est publié, plutôt que de choisir entre une aube courbée vers l'arrière et la
+même courbée vers l'avant.
+
+- **Angles de bord extrapolés au bord.** Lus sur la zone de 5 à 20 % de l'étendue
+  radiale qui suit chaque bord — l'arrondi du bord lui-même n'en dit rien —, ils
+  glissaient vers l'angle de l'autre bord d'un huitième de β2 − β1 : 5 degrés sur
+  le β2 de hel1. L'angle local y est maintenant ajusté en droite et extrapolé au
+  bord. Sur des aubes de synthèse d'angles connus, la lecture est exacte à 0,1 degré
+  dans une veine plane ; dans une veine inclinée de 30 degrés, que le plan coupe en
+  biais, elle est basse de 2 à 4 degrés, et la note le dit.
+- **Vrillage jugé sur le seul bord.** Il se jugeait sur tous les niveaux, y compris
+  ceux qui coupent la pale loin de son bord d'attaque : une aube droite passait pour
+  vrillée de 20 degrés. Au-delà de 20 degrés d'écart sur un bord, un β moyen ne
+  représente plus l'aube, et la confiance des angles tombe à basse.
+- **Les angles imposés l'emportent.** `--beta1` et `--beta2` étaient ignorés en
+  mode composants ; ils priment maintenant sur la lecture, qui reste publiée à côté.
+
+### Par où l'eau traverse une aube en boucle
+
+Les plans de coupe regroupent les niveaux d'une aube en boucle en deux **brins**
+de recul opposé. Ils ne se fusionnent pas : le modèle de ligne moyenne ne décrit
+qu'une grille d'aubes, et il faut savoir laquelle refoule. Cela, seules les parois
+le disent. Leur tracé dans le plan méridien — une case est paroi si la matière
+l'occupe à deux azimuts sur trois — permet de chercher, depuis le bord de fuite de
+chaque niveau, un **chemin** vers la fente de sortie : l'eau peut longer une paroi,
+monter ou descendre, mais ne revient jamais vers l'axe. Une demi-droite radiale ne
+suffisait pas : sur hel1, elle heurtait le cône du fond, que l'eau longe jusqu'à la
+fente.
+
+Sur hel1, ce tracé a renversé une conclusion. Le corps porte un disque
+intermédiaire, ouvert seulement entre r = 35 et 62 mm, et la chambre du dessus est
+fermée à sa périphérie. Le brin bas débouche vers la fente par ses huit niveaux ; le
+brin haut par aucun. L'eau venue de l'œillard ne peut que le traverser pour gagner
+le brin bas — en série, en amont — ou tourner dans la cavité où il loge. L'outil le
+dit, sans calculer ni la prérotation que ce brin donne à l'eau, ni ses pertes par
+brassage. Sans pièce de paroi, il déclare la disposition indéterminée.
+
+Le même tracé a mesuré deux écarts sur hel1 :
+
+- **La fente de sortie chevauche le corps.** La bande de sortie couvre les deux
+  lèvres du corps au bord de la roue : 71 cm² déclarés, 56 de libres, pour 9,3 mm
+  de hauteur libre au lieu de 11,8.
+- **La pale s'arrête avant la fente.** Le bord de fuite du brin bas est incliné,
+  de r = 76 à 94 mm selon la hauteur, et vaut 85 mm en moyenne quand la fente est
+  à 95,9 mm. Entre les deux, une couronne sans aube, où l'eau conserve son moment
+  cinétique : pour la ligne moyenne, r2 est le rayon du bord de fuite.
+
+Les angles lus sur le brin bas sont β1 ≈ 47° (de 19 à 71° le long d'un bord
+d'attaque incliné) et β2 ≈ 23° (de 14 à 39°), en confiance basse. Les premiers
+chiffres publiés, 67,5 et 27°, venaient des seuls niveaux du haut et d'une lecture
+décalée vers l'autre bord.
 
 ### Le genre topologique tranche ce que l'occupation ne peut pas
 
@@ -1129,7 +1192,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-359 tests : une phase par module, le banc d'audit qui balaie des roues entières
+378 tests : une phase par module, le banc d'audit qui balaie des roues entières
 et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
 hélice libre, ce que l'outil a le droit d'affirmer, l'import par composants
 déclarés avec ses sept contrôles, les sorties visuelles — palette unique,

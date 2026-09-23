@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from . import config
 from .confidence import HIGH, LOW, MEDIUM, ConfidenceMap
 from .geometry.inclusion import SolidTester
+from .geometry.meridian import MeridianWalls, free_fraction
 from .io import loader
 from .mesh import TriMesh, rotation_matrix
 from .numeric import jacobi_eigen
@@ -152,7 +153,18 @@ class FluidPlane:
     radial: bool = False  # bande cylindrique : section traversee radialement (refoulement centrifuge)
     radius: float = 0.0  # m, rayon moyen de la bande quand `radial`
     height: float = 0.0  # m, hauteur axiale de la bande quand `radial`
+    free: float = 1.0  # part du solide qu'aucune paroi n'occupe (controle « passage libre »)
     warnings: list[str] = field(default_factory=list)
+
+    @property
+    def free_area(self) -> float:
+        """Aire de passage que les parois laissent a l'eau, m2."""
+        return self.area * self.free
+
+    @property
+    def free_height(self) -> float:
+        """Hauteur de bande que les parois laissent a l'eau, m."""
+        return self.height * self.free
 
     def to_dict(self) -> dict:
         """Vue serialisable, en SI."""
@@ -166,6 +178,8 @@ class FluidPlane:
             "bande_cylindrique": self.radial,
             "rayon_de_bande_m": self.radius or None,
             "hauteur_de_bande_m": self.height or None,
+            "part_libre": self.free,
+            "aire_libre_m2": self.free_area,
         }
 
 
@@ -481,6 +495,102 @@ def flow_direction(inlet: FluidPlane, outlet: FluidPlane) -> Vec3:
 # ---------------------------------------------------------------------------
 # §6 : l'outil verifie, il n'accepte pas
 # ---------------------------------------------------------------------------
+def wall_testers(assembly: ComponentAssembly) -> list[SolidTester]:
+    """Les parois de la roue : moyeu (ou corps) et coque, s'ils sont fournis."""
+    testers = []
+    for slot in (SLOT_HUB, SLOT_SHELL):
+        component = assembly.component(slot)
+        if component is not None and component.mesh is not None:
+            testers.append(SolidTester(component.mesh))
+    return testers
+
+
+def meridian(assembly: ComponentAssembly) -> MeridianWalls | None:
+    """Le plan meridien des parois, ou `None` sans piece de paroi."""
+    testers = wall_testers(assembly)
+    if not testers:
+        return None
+    axis = assembly.axis_origin
+    parois = [assembly.component(s) for s in (SLOT_HUB, SLOT_SHELL)]
+    parois = [c for c in parois if c is not None and c.mesh is not None]
+    pieces = [c for c in assembly.components.values() if c.mesh is not None]
+    r_max = max(c.radial_extent(axis)[1] for c in pieces)
+    z_range = (min(c.low[2] for c in parois), max(c.high[2] for c in parois))
+    return MeridianWalls(testers, axis, r_max, z_range)
+
+
+def _passage_points(component: Component, plane: FluidPlane, axis: Vec3) -> list[Vec3]:
+    """Points de sondage d'un solide fluide, sur sa surface moyenne."""
+    if plane.radial:
+        points = []
+        n_z, n_t = config.FREE_PASSAGE_HEIGHTS, config.FREE_PASSAGE_AZIMUTHS
+        for k in range(n_z):
+            z = component.low[2] + (k + 0.5) * (component.high[2] - component.low[2]) / n_z
+            for m in range(n_t):
+                angle = 0.1234 + 2.0 * math.pi * m / n_t
+                points.append((axis[0] + plane.radius * math.cos(angle),
+                               axis[1] + plane.radius * math.sin(angle), z))
+        return points
+    # Tranche plate : grille dans son plan moyen, restreinte au solide.
+    low, high = component.low, component.high
+    thin = min(range(3), key=lambda k: high[k] - low[k])
+    a, b = [k for k in range(3) if k != thin]
+    inside = SolidTester(component.mesh)
+    n = config.FREE_PASSAGE_GRID
+    points = []
+    for u in range(n):
+        for v in range(n):
+            point = [0.0, 0.0, 0.0]
+            point[thin] = 0.5 * (low[thin] + high[thin])
+            point[a] = low[a] + (u + 0.5) * (high[a] - low[a]) / n
+            point[b] = low[b] + (v + 0.5) * (high[b] - low[b]) / n
+            if inside.contains(point):
+                points.append(tuple(point))
+    return points
+
+
+def check_free_passage(assembly: ComponentAssembly) -> Check:
+    """8. Passage libre : une paroi occupe-t-elle une partie d'un solide fluide ?
+
+    Le solide fluide dit ou passe l'eau ; s'il deborde sur une paroi, la part
+    occupee n'est pas une section de passage. Sur la roue d'essai hel1, la
+    bande de sortie couvrait les deux levres du corps au bord de la roue : 71
+    cm2 declares, un quart de moins de libres. L'aire retenue pour la suite est
+    **toujours** la part libre ; le controle signale l'ecart quand il depasse
+    `FREE_PASSAGE_TOLERANCE`.
+    """
+    testers = wall_testers(assembly)
+    if not testers:
+        return Check("passage libre", True, False,
+                     "ni moyeu ni coque : aucune paroi a confronter aux solides fluide")
+    mesures, ecarts = [], []
+    for slot, plane in ((SLOT_INLET, assembly.inlet), (SLOT_OUTLET, assembly.outlet)):
+        component = assembly.component(slot)
+        if plane is None or component is None or component.mesh is None or plane.area <= 0.0:
+            continue
+        plane.free = free_fraction(testers, _passage_points(component, plane, assembly.axis_origin))
+        mesures.append(
+            f"{slot} : {plane.free:.0%} libre, {plane.free_area * 1e4:.1f} cm2 sur "
+            f"{plane.area * 1e4:.1f}"
+        )
+        if 1.0 - plane.free > config.FREE_PASSAGE_TOLERANCE:
+            ecarts.append(
+                f"{slot} occupe a {1.0 - plane.free:.0%} par une paroi : aire libre "
+                f"{plane.free_area * 1e4:.1f} cm2 au lieu de {plane.area * 1e4:.1f}"
+                + (f", hauteur libre {plane.free_height * config.MM_PER_M:.1f} mm au lieu de "
+                   f"{plane.height * config.MM_PER_M:.1f}" if plane.radial else "")
+            )
+    if ecarts:
+        return Check(
+            "passage libre", False, False,
+            f"{'; '.join(ecarts)}. L'aire retenue est la part libre ; si le solide fluide "
+            "devait longer les parois sans les chevaucher, redessinez-le."
+        )
+    return Check("passage libre", True, False,
+                 "aucune paroi n'occupe les solides fluide"
+                 + (f" ({'; '.join(mesures)})" if mesures else ""))
+
+
 def check_distinct_planes(assembly: ComponentAssembly) -> Check:
     """Entree et sortie distinctes : sans elles, le sens debitant n'existe pas.
 
@@ -888,6 +998,7 @@ def assemble(
         check_blade_count(assembly),
         check_declared_topology(assembly),
         check_watertight(assembly),
+        check_free_passage(assembly),
     ]
     for check in assembly.checks:
         if not check.passed:

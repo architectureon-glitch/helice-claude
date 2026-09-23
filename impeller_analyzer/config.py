@@ -242,6 +242,22 @@ CORNER_TOLERANCE = 0.0005  # m - deux pieces de tailles differentes dont les boi
 OVERLAP_TOLERANCE = 0.20  # - - interpenetration admise entre composants : part de la surface de l'un situee dans le volume de l'autre (SPEC v2 6.2 : 5 % de boites, inapplicable a une roue fermee). Mesure sur la roue d'essai hel1 : 9 % de la pale plonge dans moyeu et flasque, pour la soudure ; une piece mal placee depasse largement
 INTERSECTION_SAMPLES = 2000  # points - echantillonnage des surfaces pour les tests de recouvrement en volume (copies de pale, pale dans le moyeu)
 COPY_OVERLAP_TOLERANCE = 0.10  # - - part de la surface d'une copie tournee de la pale admise dans le volume de l'original. Mesure sur hel1 : 5 % a N = 5, les pales reelles etant soudees entre elles ; 14 % a N = 12. Le controle attrape l'erreur grossiere, il ne departage pas N et N+1
+ISOLATED_LEVELS = 24  # niveaux - plans de coupe z = cste d'une pale isolee a refoulement radial (surfaces de courant)
+ISOLATED_MIN_POINTS = 12  # points - points de coupe minimaux pour lire un profil
+JUNCTION_SWEEP_FRACTION = 0.30  # - - un niveau dont le recul moyen tombe sous cette part du recul typique est une jonction de brins : ecarte
+BRANCH_MIN_LEVELS = 2  # niveaux - etendue minimale d'un brin pour y lire des angles
+TIP_SPAN_FRACTION = 0.30  # - - un profil plus etroit radialement que cette part du plus large est une pointe de boucle : ses bords ne portent pas d'angle
+LE_TWIST_WARN_DEG = 20.0  # degres - ecart d'angle d'attaque selon la hauteur au-dela duquel un beta1 moyen ne represente plus l'aube
+EDGE_REACH = 0.05  # - - un niveau porte le bord de fuite (resp. d'attaque) de la pale s'il atteint son rayon de sortie (resp. d'entree) a cette fraction pres
+CAMBER_STATIONS = 40  # stations - rayons ou la ligne moyenne d'un profil est prise au milieu de ses deux faces
+CAMBER_EDGE_START = 0.05  # - - debut de la zone de lecture d'un angle de bord, en fraction de l'etendue radiale depuis le bord (l'arrondi du bord n'en dit rien)
+CAMBER_EDGE_END = 0.20  # - - fin de cette zone
+MERIDIAN_CELLS = 300  # cases - resolution du plan meridien des parois, sur le rayon de la roue (0,3 mm sur hel1 : trois cases au moins dans le disque intermediaire de 1,8 mm)
+MERIDIAN_EDGE_CELLS = 2  # cases - sonde juste au-dela du bout d'un profil pour dire s'il est libre ou appuye sur une paroi
+FREE_PASSAGE_TOLERANCE = 0.05  # - - part d'un solide fluide occupee par une paroi au-dela de laquelle le controle le signale ; l'aire retenue est toujours la part libre
+FREE_PASSAGE_HEIGHTS = 48  # niveaux - sondage d'une bande de sortie sur sa hauteur
+FREE_PASSAGE_AZIMUTHS = 24  # azimuts - sondage d'une bande de sortie sur son tour
+FREE_PASSAGE_GRID = 32  # cases - sondage d'une tranche plate dans son plan (par cote)
 BLADE_COPY_CLEARANCE = 0.0  # m - jeu minimal exige entre deux copies de pale voisines ; zero, seul le recoupement compte
 DECLARED_BLADES_MIN = 2  # nombre de pales declarable minimal (SPEC v2 2)
 DECLARED_BLADES_MAX = 24  # nombre de pales declarable maximal (SPEC v2 2)
