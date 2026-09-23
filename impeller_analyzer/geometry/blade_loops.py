@@ -81,16 +81,35 @@ class LoopResult:
 def z_segments(
     occupancy: OccupancyMap, blade_mask: list[list[bool]], ir: int, itheta: int
 ) -> int:
-    """Nombre de tronçons de pale separes le long de z, a rayon et azimut fixes."""
-    previous = False
+    """Nombre de tronçons de pale separes le long de z, a rayon et azimut fixes.
+
+    Un tronçon d'au plus `LOOP_FRINGE_ROWS` cellules colle a une cellule pleine
+    (moyeu, flasque) n'est pas un brin d'aube : c'est la frange de cette piece.
+    Une face de moyeu parfaitement plane tombe sur un bord de cellule et reste
+    pleine ; la meme face bosselee -- maillage scanne, bruit de 0.1 mm -- n'est
+    plus pleine qu'a 97 %, bascule dans le masque des pales, et le dessus et le
+    dessous d'un moyeu plein se lisaient comme les deux brins d'une boucle.
+    """
+
+    def material(iz: int) -> bool:
+        return any(start <= ir < stop for start, stop in occupancy.intervals[iz][itheta])
+
+    def solid(iz: int) -> bool:
+        return 0 <= iz < occupancy.nz and occupancy.f[iz][ir] >= config.F_SOLIDE and material(iz)
+
     count = 0
-    for iz in range(occupancy.nz):
-        here = blade_mask[iz][ir] and any(
-            start <= ir < stop for start, stop in occupancy.intervals[iz][itheta]
-        )
-        if here and not previous:
+    iz = 0
+    while iz < occupancy.nz:
+        if not (blade_mask[iz][ir] and material(iz)):
+            iz += 1
+            continue
+        start = iz
+        while iz < occupancy.nz and blade_mask[iz][ir] and material(iz):
+            iz += 1
+        length = iz - start
+        fringe = length <= config.LOOP_FRINGE_ROWS and (solid(start - 1) or solid(iz))
+        if not fringe:
             count += 1
-        previous = here
     return count
 
 

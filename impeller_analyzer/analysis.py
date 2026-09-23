@@ -30,7 +30,7 @@ from .hydraulics import propulsion as propulsion_module
 from .hydraulics import sensitivity as sensitivity_module
 from .hydraulics import similarity as similarity_module
 from .io import loader
-from .mesh import TriMesh
+from .mesh import TriMesh, dot
 
 
 #: Modele hydraulique retenu. `auto` laisse la classification geometrique
@@ -95,10 +95,10 @@ class Options:
                     f"regime hors domaine : {rpm:g} tr/min. Attendu entre 0 (exclu) et "
                     f"{config.RPM_MAX:g} tr/min."
                 )
-        if self.blades is not None and self.blades < config.BLADES_MIN:
+        if self.blades is not None and not config.BLADES_MIN <= self.blades <= config.DECLARED_BLADES_MAX:
             raise ValueError(
-                f"nombre de pales impose invalide : {self.blades}. Le modele en demande au "
-                f"moins {config.BLADES_MIN}."
+                f"nombre de pales impose invalide : {self.blades}. Attendu entre "
+                f"{config.BLADES_MIN} et {config.DECLARED_BLADES_MAX}."
             )
         for name, value in (("beta1", self.beta1_deg), ("beta2", self.beta2_deg)):
             if value is not None and not config.BETA_MIN_DEG <= value <= config.BETA_MAX_DEG:
@@ -107,6 +107,16 @@ class Options:
                     f"{config.BETA_MIN_DEG:g} et {config.BETA_MAX_DEG:g}, angles mesures depuis "
                     "la direction tangentielle."
                 )
+        if max(self.grid_nr, self.grid_nz) > config.GRID_MAX:
+            raise ValueError(
+                f"grille trop fine : {self.grid_nr}x{self.grid_nz}. Au plus {config.GRID_MAX} "
+                "cellules dans chaque direction : au-dela, la memoire et la duree explosent "
+                "sans rien resoudre de plus."
+            )
+        if self.n_theta > config.N_THETA_MAX:
+            raise ValueError(
+                f"trop de secteurs azimutaux : {self.n_theta}. Au plus {config.N_THETA_MAX}."
+            )
         if min(self.grid_nr, self.grid_nz) < config.GRID_MIN:
             raise ValueError(
                 f"grille trop grossiere : {self.grid_nr}x{self.grid_nz}. Au moins "
@@ -149,10 +159,25 @@ class Options:
                 f"fluide inconnu : '{self.fluid}'. Attendu : "
                 f"{', '.join(sorted(propulsion_module.FLUIDS))}."
             )
-        if self.r_aspiration_cm is not None and self.r_aspiration_cm <= 0.0:
+        if self.r_aspiration_cm is not None and not (
+            math.isfinite(self.r_aspiration_cm) and self.r_aspiration_cm > 0.0
+        ):
             raise ValueError(
                 f"rayon d'aspiration impose invalide : {self.r_aspiration_cm:g} cm. Il doit "
-                "etre positif."
+                "etre un nombre positif."
+            )
+        if not config.HAUTEUR_ASPIRATION_MIN <= self.suction_height <= config.HAUTEUR_ASPIRATION_MAX:
+            raise ValueError(
+                f"hauteur d'aspiration hors domaine : {self.suction_height:g} m. Attendue entre "
+                f"{config.HAUTEUR_ASPIRATION_MIN:g} m (aspiration, pompe au-dessus du plan d'eau) "
+                f"et {config.HAUTEUR_ASPIRATION_MAX:g} m (en charge) : au-dela, c'est une faute "
+                "de saisie ou d'unite."
+            )
+        if not 0.0 <= self.suction_losses <= config.PERTES_ASPIRATION_MAX:
+            raise ValueError(
+                f"pertes de charge d'aspiration hors domaine : {self.suction_losses:g} m. "
+                f"Attendues entre 0 et {config.PERTES_ASPIRATION_MAX:g} m : une perte negative "
+                "ajouterait de l'energie au liquide."
             )
 
     def to_dict(self) -> dict:
@@ -205,6 +230,7 @@ class AnalysisResult:
     speed_limit: cavitation_module.SpeedLimit | None = None
     similarity: similarity_module.SimilarityCheck | None = None
     discharge: dict = field(default_factory=dict)
+    rejection: str | None = None  # motif de refus : la piece n'est pas une roue que le modele decrit
     mesh: TriMesh | None = None
     warnings: list[str] = field(default_factory=list)
     confidence: ConfidenceMap = field(default_factory=ConfidenceMap)
@@ -246,6 +272,7 @@ class AnalysisResult:
             "confiance": dict(self.confidence),
             "provenance": dict(self.provenance),
             "confiance_globale": self.overall_confidence(),
+            "analyse_interrompue": self.rejection,
             "avertissements": list(self.warnings),
             "incertitude_du_modele": {
                 "hauteur": config.UNCERTAINTY_H,
@@ -258,6 +285,106 @@ class AnalysisResult:
             },
             "duree_s": self.elapsed_s,
         }
+
+
+def _periodicity(aligned: TriMesh) -> tuple[float, int]:
+    """Periodicite d'une orientation : `(ecart relatif apres 2*pi/N, N)`.
+
+    Carte grossiere et nombre de pales lu sur elle : le but est de departager
+    des axes candidats, pas de mesurer la roue. `(inf, 0)` si aucune pale ne se
+    lit.
+    """
+    occupancy = occupancy_module.build_occupancy(
+        aligned, nr=config.AXIS_PROBE_GRID, nz=config.AXIS_PROBE_GRID, n_theta=config.AXIS_PROBE_THETA
+    )
+    count = topology_module.count_blades(
+        occupancy, aligned, samples=config.AXIS_PROBE_SAMPLES, cap=2.0 * config.SYM_REJECT,
+        verdict_only=True,
+    )
+    if count.periodicity is None:
+        return math.inf, 0
+    return count.periodicity, count.periodic_order
+
+
+def _parallel(a, b) -> bool:
+    return abs(dot(a, b)) >= math.cos(math.radians(config.AXIS_WARN_DEG))
+
+
+def _choose_axis(mesh: TriMesh, options: Options) -> tuple[TriMesh, axis_module.AxisResult]:
+    """Axe de rotation : l'inertie propose, la periodicite tranche quand elle doute.
+
+    Le tenseur d'inertie designe l'axe des deux valeurs propres egales. C'est
+    le bon pour une roue de trois pales ou plus ; pour deux pales, une pale
+    elancee et un moyeu court donnent l'envergure, en confiance haute, et le
+    maillage etait bascule de 90 degres sans que rien ne le signale. Des que
+    l'inertie n'est pas nette ou contredit la convention Z, chaque axe principal
+    est donc mis a l'epreuve de ce qui definit une roue : se superposer a
+    soi-meme apres une rotation de 2*pi/N.
+
+    Plusieurs axes peuvent reussir l'epreuve. Une roue a aubes helicoidales est
+    aussi symetrique d'ordre 2 autour d'axes perpendiculaires au sien ; l'axe de
+    la roue est alors celui d'ordre le plus eleve. A deux pales, les trois axes
+    principaux sont d'ordre 2 et rien dans la geometrie ne les departage : la
+    convention Z est gardee, mais l'axe est publie comme non verifie.
+    """
+    aligned, result = axis_module.align_to_z(mesh)
+    nette = result.confidence == HIGH and result.angle_to_z_deg <= config.AXIS_WARN_DEG
+    if nette or not options.symmetry_check:
+        return aligned, result
+
+    inertia_axis = result.axis
+    candidates = []
+    for axis in axis_module.candidate_axes(result):
+        oriented = axis_module.orient(mesh, result.centre, axis)
+        score, order = _periodicity(oriented)
+        candidates.append((score, order, axis, oriented))
+    passing = [c for c in candidates if c[0] <= config.SYM_TOL and c[1] >= config.BLADES_MIN]
+    if not passing:
+        # Aucun axe ne rend la piece periodique : on garde la lecture de
+        # l'inertie, et le controle de recevabilite dira la suite.
+        return aligned, result
+
+    top = max(c[1] for c in passing)
+    tied = [c for c in passing if c[1] == top]
+    chosen = (
+        next((c for c in tied if _parallel(c[2], axis_module.REFERENCE_AXIS)), None)
+        or next((c for c in tied if _parallel(c[2], inertia_axis)), None)
+        or tied[0]
+    )
+    score, order, axis, oriented = chosen
+    angle = math.degrees(math.acos(max(-1.0, min(1.0, abs(axis[2])))))
+    result.realigned = angle > config.AXIS_WARN_DEG
+    result.axis = axis if result.realigned else axis_module.REFERENCE_AXIS
+    result.angle_to_z_deg = angle if result.realigned else 0.0
+    # Les messages de la detection par l'inertie ne valent plus : l'axe est
+    # maintenant fixe par la periodicite, et une inertie anisotrope est la
+    # signature normale d'une roue a deux pales.
+    result.warnings = [
+        w for w in result.warnings
+        if "le maillage est realigne sur Z" not in w
+        and not w.startswith("symetrie de revolution imparfaite")
+    ]
+    where = (
+        f"a {angle:.1f} deg de Z : le maillage est realigne" if result.realigned
+        else "soit Z : la convention est confirmee"
+    )
+    if len(tied) > 1:
+        result.confidence = MEDIUM
+        result.warnings.append(
+            f"plusieurs axes superposent la piece a elle-meme avec le meme ordre ({order}) : c'est "
+            "le cas d'une roue a deux pales helicoidales, symetrique autour de ses trois axes "
+            f"principaux. Rien dans la geometrie ne designe l'axe de rotation ; celui retenu est {where}"
+            ". Il n'est pas verifie : exportez la roue avec son axe de rotation sur Z."
+        )
+    else:
+        result.confidence = HIGH
+        if not _parallel(inertia_axis, axis):
+            result.warnings.append(
+                "l'inertie designait un autre axe que l'axe de rotation. L'axe retenu est le seul "
+                f"autour duquel la piece se superpose a elle-meme apres 2*pi/{order} (ecart "
+                f"{score:.3f} du rayon exterieur), {where}."
+            )
+    return oriented, result
 
 
 def run(path: str, options: Options | None = None) -> AnalysisResult:
@@ -276,7 +403,7 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     result.confidence.update(import_report.confidence)
 
     # Phase 2 : axe, recentrage, carte d'occupation.
-    aligned, axis_result = axis_module.align_to_z(mesh)
+    aligned, axis_result = _choose_axis(mesh, options)
     result.mesh = aligned
     result.axis = axis_result
     result.warnings.extend(axis_result.warnings)
@@ -328,6 +455,23 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     result.warnings.extend(topology.warnings)
     result.warnings.extend(topology.blades.warnings)
     result.confidence.update(topology.confidence)
+
+    # Recevabilite : tout ce qui suit suppose une roue de N pales identiques
+    # autour de l'axe retenu. Si la piece ne se superpose pas a elle-meme apres
+    # une rotation de 2*pi/N, les angles, la hauteur et le debit seraient
+    # calcules sur une forme que le modele ne decrit pas : l'analyse s'arrete la,
+    # avec la carte d'occupation et la topologie pour comprendre pourquoi.
+    motif = (
+        topology_module.admissibility(topology.blades, occupancy)
+        if options.symmetry_check else None
+    )
+    if motif is not None:
+        result.rejection = motif
+        result.warnings.insert(0, f"analyse interrompue : {motif}")
+        result.confidence.cap_all(LOW)
+        _fill_provenance(result, options)
+        result.elapsed_s = time.time() - started
+        return result
 
     # Forme des aubes : une aube qui se referme sur elle-meme invalide tout ce
     # que la phase 4 en tirerait, la coupe la traversant deux fois.
@@ -436,14 +580,38 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
             # Les normales fournissent les angles, plus le sens : celui-ci vient
             # de l'utilisateur, et sa confiance ne se lit pas sur une mesure.
             result.confidence.set("angles_de_pale", normals.confidence)
-        else:
+        elif loops.looped:
             result.warnings.append(
                 "aubes en boucle et lecture par les normales infructueuse : les angles de pale "
                 "restent ceux de la cambrure, qui ne s'applique pas a cette forme. Imposez "
                 "--beta1 et --beta2."
             )
+        else:
+            result.warnings.append(
+                "la lecture par les normales echoue elle aussi : aucune des deux methodes ne "
+                "trouve d'angle de pale sur cette piece. Imposez --beta1 et --beta2."
+            )
             for quantity in loops_module.INVALIDATED_BY_LOOP:
                 result.confidence.set(quantity, LOW)
+
+    if geometry.beta2_deg <= 0.0 and options.beta2_deg is None:
+        # Aucune lecture n'a trouve d'aube : ce que la carte compte, ce sont des
+        # lobes de matiere -- les coins d'une plaque en font aussi. Le nombre et
+        # le type qui en decoulent ne peuvent pas rester affirmes.
+        doubtful = []
+        if options.blades is None:
+            doubtful.append("nombre_de_pales")
+        if options.wheel_type == WHEEL_AUTO:
+            doubtful.append("type_de_roue")
+        for quantity in doubtful:
+            for table in (topology.confidence, result.confidence):
+                table.set(quantity, worst(table.get(quantity, HIGH), MEDIUM))
+        result.warnings.append(
+            f"aucune surface d'aube n'a pu etre lue : les {topology.blades.n_blades} « pales » "
+            "comptees sont des lobes de matiere sur la carte d'occupation, pas des aubes "
+            "confirmees. Le nombre de pales et le type de roue sont donc publies en confiance "
+            "moyenne au plus. Si la piece est bien une roue, imposez --beta1, --beta2 et --blades."
+        )
 
     if result.blade_normals is not None and result.blade_normals.beta2_deg > 0.0 and camber_warnings:
         # Les reserves de la cambrure portent sur une lecture qui n'a pas ete
@@ -565,7 +733,14 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
             )
             result.warnings.extend(result.channel_losses.warnings)
 
-        result.head_sensitivity = meanline_module.head_sensitivity(data, curves[0].rpm)
+        # Sans point nominal au regime de reference, il n'y a rien dont mesurer la
+        # sensibilite : la hauteur n'est pas « hypersensible », elle n'existe pas,
+        # et annoncer que le debit « reste fiable » serait parler d'un chiffre
+        # qui n'a pas ete calcule.
+        has_point = curves[0].nominal_point() is not None
+        result.head_sensitivity = (
+            meanline_module.head_sensitivity(data, curves[0].rpm) if has_point else 0.0
+        )
 
         # Sensibilite complete : hauteur, debit et NPSHr, contre beta1, beta2 et
         # le diametre. Ce que le modele annonce comme incertitude suppose la
@@ -812,6 +987,10 @@ def _fill_provenance(result: AnalysisResult, options: Options) -> None:
     # et une lecture, ce que ni « declare » ni « mesure » ne decrit. On retient
     # la moins engageante des deux.
     if (options.beta1_deg is None) != (options.beta2_deg is None):
+        provenance.set("angles_de_pale", DEFAUT)
+    # Des angles que rien n'a lus ne sont pas « mesures » : zero est la valeur
+    # d'attente, pas une lecture.
+    if result.blades is not None and result.blades.beta2_deg <= 0.0 and options.beta2_deg is None:
         provenance.set("angles_de_pale", DEFAUT)
     # Les conditions de site ne sont jamais mesurees : elles viennent de la
     # ligne de commande ou de config.

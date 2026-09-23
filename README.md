@@ -572,12 +572,15 @@ dessus.
 | Nombre de pales | analyse de Fourier | déclaré |
 | Type de roue | classification géométrique | déclaré |
 
-### Les six contrôles
+### Les sept contrôles
 
-Une déclaration est une entrée, jamais une dispense de contrôle. Un seul est
-**bloquant** — le repère commun — et pour une raison précise : sa violation ne se
-voit sur aucune grandeur publiée. Chaque pièce se lit correctement dans son coin,
-et seule leur position relative, donc tout ce que le mode apporte, est fausse.
+Une déclaration est une entrée, jamais une dispense de contrôle. Deux sont
+**bloquants**. Le repère commun, parce que sa violation ne se voit sur aucune
+grandeur publiée : chaque pièce se lit correctement dans son coin, et seule leur
+position relative, donc tout ce que le mode apporte, est fausse. Et les plans
+distincts : le même fichier donné en entrée et en sortie rendait un sens débitant
+nul, que la normalisation changeait sans bruit en +Z, et dont le sens de rotation
+était ensuite déduit.
 
 Les cinq autres avertissent sans annuler : interpénétration des boîtes, position
 de la pale entre les deux plans, nombre de pales trop grand pour l'étendue
@@ -874,6 +877,119 @@ définition.
 `python -m impeller_analyzer roue.stl` — rendait la main sans rien dire ni rien
 écrire, code de sortie zéro. Le module a maintenant son garde `__main__`.
 
+## Stress : ce que la deuxième relecture a trouvé
+
+Une seconde campagne a soumis l'outil à ce qu'il rencontrera hors du banc :
+fichiers corrompus ou dans des variantes de format légales, pièces qui ne sont
+pas des roues, roues exportées couchées, scannées, loin de l'origine, arguments
+absurdes, et le serveur local à des requêtes hostiles. Quatre suites de tests
+(`test_stress_*.py`) en gardent la trace ; voici ce qu'elles ont fait corriger.
+
+### Une pièce qui n'est pas une roue ne reçoit plus de performance
+
+Une roue exportée avec un corps parasite à côté recevait un débit de 9,3 m³/h et
+une hauteur de 8,5 m, en confiance « faible » — mot qui dit « estimation
+incertaine », là où il n'y avait pas d'estimation du tout. Deux roues côte à côte,
+pareil. L'analyse s'arrête désormais avant tout calcul hydraulique, avec
+l'occupation et la topologie pour comprendre pourquoi, si l'une de deux
+propriétés manque :
+
+- **la périodicité** : une roue de N pales se superpose à elle-même après une
+  rotation de 2π/N. Mesuré sur toutes les roues valides du banc, y compris une roue
+  privée de 5 % de ses triangles, l'écart reste sous 1,8 % du rayon extérieur ; les
+  pièces parasites donnent 29 à 30 %. Le seuil de refus est à 10 % (`SYM_REJECT`) ;
+- **un anneau de matière** faisant le tour de l'axe — moyeu, alésage, flasque ou
+  jante. Deux roues identiques côte à côte sont réellement symétriques d'ordre 2
+  autour de l'axe médian : seule l'absence d'anneau les distingue d'un rotor.
+
+`--sans-controle-symetrie` lève ce contrôle pour une roue volontairement
+irrégulière, et le rapport le dit.
+
+### L'axe d'une roue à deux pales
+
+L'inertie désigne l'axe des deux moments égaux. Pour deux pales élancées, c'est
+**l'envergure** : le maillage était basculé de 90 degrés, en confiance haute.
+Quand l'inertie hésite ou contredit Z, chaque axe principal est maintenant mis à
+l'épreuve de la périodicité, et l'axe d'ordre le plus élevé l'emporte — une roue
+à aubes hélicoïdales est aussi symétrique d'ordre 2 autour d'axes perpendiculaires
+au sien. À deux pales, les trois axes sont d'ordre 2 et rien ne les départage :
+Z est gardé, et l'axe est publié **non vérifié**, en confiance moyenne.
+
+### Le nombre de pales se vérifie sur la pièce
+
+Le spectre angulaire lisait 9 pales sur une roue de 3 aubes en boucle : un
+harmonique de la forme des aubes. Quand la rotation de 2π/N ne superpose pas la
+pièce, les diviseurs de N et les pics les plus forts sont essayés, et le plus grand
+ordre qui tient est retenu, en confiance moyenne. Un nombre **imposé** par
+`--blades` est lui aussi confronté à la pièce : démenti, il perd la confiance
+haute qu'il recevait d'office.
+
+### Un scan ne fabrique plus d'aubes en boucle
+
+0,1 mm de bruit sur les sommets — ce que rend un scan 3D — suffisait à faire lire
+des aubes en boucle sur une roue centrifuge ordinaire, et β2 tombait de 24,5 à
+6,6 degrés. La face bosselée d'un moyeu plein n'est plus pleine qu'à 97 %, bascule
+dans le masque des pales, et le dessus et le dessous du moyeu se lisaient comme
+les deux brins d'une boucle. Un tronçon d'au plus deux cellules collé à de la
+matière pleine est désormais une frange, pas un brin (`LOOP_FRINGE_ROWS`). Jusqu'à
+0,4 mm de bruit, β2 reste à moins de trois degrés, et la confiance sur les angles
+descend d'elle-même à moyenne.
+
+### Ce qui n'est pas lu n'est pas publié comme lu
+
+Une plaque à deux lobes recevait « 2 pales, roue axiale, moyeu plein » en
+confiance haute, des angles « 0,0 / 0,0 » de provenance « mesuré », une vitesse
+maximale de « 0 tr/min », et l'assurance que « le débit et le NPSHr restent
+fiables » — sans qu'aucun débit n'ait été calculé. Sans aube lue, nombre et type
+sont plafonnés à moyenne, les angles sont « non lus », la vitesse maximale « non
+calculable ». Zéro tr/min reste une réponse quand le NPSH disponible est négatif.
+
+### Import
+
+Un STL ASCII indenté était lu comme un binaire tronqué ; un binaire SolidWorks à
+en-tête « solid » suivi d'octets de bourrage, refusé ; un OFF coloré, décalé ; un
+PLY à coordonnées de texture, lu sur la mauvaise liste. Coordonnées infinies et
+indices hors bornes (OBJ numéroté à partir de zéro) sortaient en trace de pile :
+ils sont refusés à l'import avec leur cause. Un facteur d'unité `nan` rendait tout
+le maillage NaN. Une pièce à deux kilomètres de l'origine est signalée : un export
+en simple précision n'y résout que 0,1 mm. Les sept formats lisibles rendent
+exactement la même analyse de la même roue.
+
+### Entrées et sorties
+
+Hauteur et pertes d'aspiration, rayon d'aspiration : `nan` sortait en trace de
+pile, des pertes négatives ajoutaient de l'énergie, un rayon d'aspiration de 10 m
+passait sur une roue de 10 cm. 10⁸ secteurs angulaires épuisaient la mémoire. Un
+dossier de sortie impossible produisait une trace. Chaque cas donne maintenant une
+phrase ; et une exception imprévue est annoncée comme un défaut **de l'outil**,
+code de sortie 3, trace jointe.
+
+### Mode composants
+
+Le seuil d'anisotropie des tranches fluides valait 2,0 — exactement la limite
+qu'une tranche mince atteint sans jamais la dépasser (I_n = I₁ + I₂) : chaque
+analyse avertissait d'une normale « incertaine » sur des tranches parfaites. Il
+vaut 1,5, soit une tranche aussi épaisse que son rayon. Une erreur d'import nomme
+maintenant l'emplacement fautif.
+
+### Serveur local et page
+
+Le serveur vérifie que la requête lui est adressée (`Host`) et vient de sa propre
+page (`Origin`) : une page malveillante ne peut plus lui poster de fichier ni se
+faire passer pour lui par rebinding DNS. Un nombre non fini dans le formulaire
+donne un 400, plus un 500. La charge JSON de la page est écrite en échappements
+unicode pour `<`, `>` et `&` : aucune chaîne ne peut plus fermer l'élément
+`<script>`.
+
+### Ce que la campagne a vérifié sans rien trouver
+
+Lois de similitude exactes (Q ∝ n, H ∝ n², P ∝ n³), effet d'échelle exact (taille
+×10 à régime /10 : débit ×100, hauteur identique), NPSH disponible décroissant
+avec la température et l'altitude, vitesse maximale décroissante avec les pertes,
+bilan d'énergie refermé à 10⁻¹⁶. Même roue tournée de 37 degrés, exportée Y en
+haut, en mm ou en m, faces permutées, normales inversées, en ASCII : même roue, à
+0,2 degré près. Son miroir tourne en sens inverse.
+
 ## Validation
 
 ```bash
@@ -958,11 +1074,12 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-296 tests : une phase par module, le banc d'audit qui balaie des roues entières
+349 tests : une phase par module, le banc d'audit qui balaie des roues entières
 et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
 hélice libre, ce que l'outil a le droit d'affirmer, l'import par composants
-déclarés avec ses six contrôles, et les sorties visuelles — palette unique,
-autonomie de la page, recalcul des deux curseurs. Ils passent aussi sous
+déclarés avec ses sept contrôles, les sorties visuelles — palette unique,
+autonomie de la page, recalcul des deux curseurs — et les trois suites de stress :
+fichiers corrompus, pièces hors domaine, entrées hostiles. Ils passent aussi sous
 `pytest` si vous l'avez : ce sont des `unittest.TestCase`.
 
 ## Architecture
@@ -1007,6 +1124,15 @@ impeller_analyzer/
 Modèle 1D ligne moyenne : **hauteur ±18 %, débit ±25 %, NPSHr ±30 %** — et le
 cas de référence ci-dessus suggère que l'écart sur la hauteur peut être plus
 grand encore sur une pompe réelle tant que le calage n'a pas été fait.
+
+Limites de lecture connues, que l'outil signale quand il les rencontre :
+
+- le nombre de pales se cherche entre 2 et 12 ; au-delà, il faut l'imposer
+  (`--blades`, jusqu'à 24) ;
+- l'axe d'une roue à **deux** pales hélicoïdales ne se déduit pas de la géométrie :
+  exportez-la avec son axe sur Z ;
+- une pièce volontairement irrégulière — pas variable, pale cassée — est refusée
+  par le contrôle de périodicité, qu'il faut lever sciemment.
 
 **À vérifier par essai sur banc avant toute décision d'achat ou de
 dimensionnement.**

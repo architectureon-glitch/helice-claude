@@ -127,8 +127,18 @@ class TestRoueToroidale(BaseTestCase):
     """Le generateur de roue de pompe a aubes en boucle, distinct de l'helice nue."""
 
     def test_topologie_de_boucle_reconnue(self):
-        """Deux brins au milieu, un seul au bout : c'est ce qu'il doit produire."""
+        """Deux brins au milieu, un seul au bout : c'est ce qu'il doit produire.
+
+        Le maillage passe par la reparation, comme dans le pipeline : les rubans
+        vrilles du generateur sortent avec des normales incoherentes, et lue
+        brute, la carte placait les brins sous le plateau. La boucle n'etait
+        alors reconnue que grace aux franges du plateau, comptees a tort comme
+        des brins.
+        """
+        from impeller_analyzer.io import repair
+
         roue = synthetic.toroidal_impeller(n_blades=3)
+        repair.repair(roue)
         occupancy = occupancy_of(roue, grid=150, n_theta=300)
         mask = topo.clean_blade_mask(occupancy.blade_mask())
         result = loops.detect_looped_blades(occupancy, 3, mask)

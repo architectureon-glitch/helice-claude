@@ -119,15 +119,42 @@ def align_to_z(mesh: TriMesh, result: AxisResult | None = None) -> tuple[TriMesh
     """
     if result is None:
         result = detect_axis(mesh)
+    rotate = result.angle_to_z_deg > config.AXIS_WARN_DEG and result.confidence != LOW
+    aligned = orient(mesh, result.centre, result.axis if rotate else REFERENCE_AXIS)
+    result.realigned = rotate
+    return aligned, result
+
+
+def orient(mesh: TriMesh, centre: Vec3, axis: Vec3) -> TriMesh:
+    """Copie du maillage recentree sur `centre` et tournee pour amener `axis` sur Z.
+
+    L'origine finale est sur l'axe, a la hauteur du barycentre du volume.
+    """
     aligned = mesh.copy()
-    aligned.apply_translation((-result.centre[0], -result.centre[1], -result.centre[2]))
-    if result.angle_to_z_deg > config.AXIS_WARN_DEG and result.confidence != LOW:
-        aligned.apply_rotation(rotation_between(result.axis, REFERENCE_AXIS))
-        result.realigned = True
-    # Recentrage final : l'origine est sur l'axe, a la hauteur du barycentre.
+    aligned.apply_translation((-centre[0], -centre[1], -centre[2]))
+    if dot(normalize(axis), REFERENCE_AXIS) < 1.0 - 1e-12:
+        aligned.apply_rotation(rotation_between(normalize(axis), REFERENCE_AXIS))
     centre = aligned.centroid()
     aligned.apply_translation((-centre[0], -centre[1], -centre[2]))
-    return aligned, result
+    return aligned
+
+
+def candidate_axes(result: AxisResult) -> list[Vec3]:
+    """Axes a departager : Z de la convention, puis les trois axes principaux.
+
+    L'axe de rotation d'une roue a N pales est toujours un axe principal
+    d'inertie -- la periodicite l'impose -- mais pas forcement celui des deux
+    valeurs propres egales : pour N = 2, une pale elancee est quasi symetrique
+    autour de sa propre envergure, et c'est l'envergure que ce critere designe.
+    """
+    axes: list[Vec3] = [REFERENCE_AXIS]
+    for vector in result.eigenvectors:
+        axis = normalize(vector)
+        if dot(axis, REFERENCE_AXIS) < 0.0:
+            axis = (-axis[0], -axis[1], -axis[2])
+        if all(abs(dot(axis, known)) < math.cos(math.radians(config.AXIS_WARN_DEG)) for known in axes):
+            axes.append(axis)
+    return axes
 
 
 #: Reponses possibles a la question « de quel cote aspire cette roue ? ».

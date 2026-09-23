@@ -105,7 +105,8 @@ def geometry_table(result: AnalysisResult) -> list[tuple[str, str, str, str]]:
         row("Rayon de sortie r2 (mm)", _mm(topology.r_2), "rayons"),
         row(
             "beta1 / beta2 au rayon moyen (deg)",
-            f"{_deg(blades.beta1_deg)} / {_deg(blades.beta2_deg)}",
+            (f"{_deg(blades.beta1_deg)} / {_deg(blades.beta2_deg)}"
+             if blades.beta2_deg > 0.0 else "non lus"),
             "angles_de_pale",
         ),
         row("Sens de rotation", _rotation_cell(blades), "sens_de_rotation"),
@@ -288,7 +289,18 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
         )
         lines.append("")
 
-    if result.speed_limit is not None:
+    if result.speed_limit is not None and not result.speed_limit.computed:
+        limit = result.speed_limit
+        lines.append("## Vitesse maximale sans cavitation")
+        lines.append("")
+        motif = (
+            limit.warnings[0]
+            if limit.warnings and "aucun point nominal" not in limit.warnings[0]
+            else "pas de point de fonctionnement nominal au regime de reference"
+        )
+        lines.append(f"> **Non calculable** : {motif}.")
+        lines.append("")
+    elif result.speed_limit is not None:
         limit = result.speed_limit
         lines.append("## Vitesse maximale sans cavitation")
         lines.append("")

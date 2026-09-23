@@ -39,6 +39,9 @@ ATM_EXPONENT = 5.2559  # - - exposant barometrique (ISO 2533, SPEC 6.2)
 # ---------------------------------------------------------------------------
 UNIT_FACTOR = 0.01  # m/unite - facteur par defaut cm -> m (SPEC 1.1)
 MERGE_TOL = 1e-6  # m - tolerance de fusion des sommets dupliques (SPEC 1.2)
+FLOAT32_EPS = 2.0 ** -24  # - - demi-ecart relatif entre deux flottants simple precision voisins (IEEE 754) : resolution d'un STL binaire
+FLOAT32_WARN = 2e-4  # - - resolution simple precision rapportee a la taille de la piece au-dela de laquelle on avertit (piece a ~2 km de l'origine pour 18 cm : ecarts de 0.1 % mesures)
+FLOAT32_LOW = 5e-3  # - - meme rapport au-dela duquel la geometrie importee n'est plus fiable : confiance du maillage abaissee a faible
 STEP_TESSELLATION = 2e-4  # m - tolerance de tessellation STEP/IGES, 0.2 mm (SPEC 1)
 
 # Facteurs des unites acceptees par --unit, vers le metre.
@@ -86,9 +89,15 @@ SPECTRUM_MAX_ROWS = 60  # tranches - hauteurs echantillonnees pour le spectre an
 FFT_RATIO_MEDIUM = 1.5  # - - en deca de ce rapport la detection tombe en confiance low
 AXIS_TOL = 0.05  # - - tolerance d'egalite relative des valeurs propres d'inertie (SPEC 2.1)
 SYM_TOL = 0.02  # - - distance de Hausdorff relative admise apres rotation de 2*pi/N (SPEC 3.1)
+AXIS_PROBE_GRID = 60  # cellules - carte grossiere servant a departager les axes candidats quand l'inertie doute
+AXIS_PROBE_THETA = 360  # secteurs - resolution azimutale de cette carte grossiere
+SYM_REJECT = 0.10  # - - Hausdorff relatif au-dela duquel la piece n'est pas une roue reguliere autour de l'axe : aucune performance publiee. Roues valides mesurees <= 0.018 (dont une roue privee de 5 % de ses triangles), roue flanquee d'un corps parasite ou deux roues cote a cote 0.29-0.30
 AXIS_WARN_DEG = 5.0  # degres - ecart axe detecte / Z au-dela duquel on avertit et on realigne (SPEC 2.1)
 SUCTION_ASYMMETRY_MIN = 0.05  # - - asymetrie radiale minimale de la veine pour trancher le cote aspiration
 HAUSDORFF_SAMPLES = 4000  # points - echantillonnage du maillage pour la distance de Hausdorff
+HAUSDORFF_CAP = 1.0  # - - ecretage de la distance de Hausdorff, rapporte au rayon exterieur : au-dela, la piece est de toute facon refusee et la recherche exacte ne coute que du temps
+AXIS_PROBE_SAMPLES = 1000  # points - echantillonnage reduit pour departager les axes candidats
+PERIOD_CANDIDATES = 5  # harmoniques - nombre de pics du spectre essayes quand la rotation de 2*pi/N ne superpose pas la piece
 PROXIMITY_CELLS = 32  # cellules - resolution du hachage spatial des triangles (plus grande dimension)
 BLADE_ROW_MIN_CELLS = 1  # cellules - occupation minimale d'une ligne pour compter dans la zone de pales
 BLADE_BLOB_MIN_CELLS = 20  # cellules - taille minimale absolue d'un ilot de zone de pales retenu
@@ -113,6 +122,7 @@ SPLINE_BISECTION_STEPS = 80  # - - iterations de bissection sur log(lambda)
 MIN_PROFILE_POINTS = 8  # points - taille minimale d'une polyligne pour etre exploitee comme profil
 MIN_BLADE_SECTIONS = 3  # coupes - nombre minimal de coupes exploitables pour une confiance > low
 LOOP_DOUBLE_FRACTION = 0.50  # - - fraction des azimuts coupant l'aube deux fois au-dela de laquelle elle est une boucle
+LOOP_FRINGE_ROWS = 2  # cellules - un troncon de pale d'au plus cette hauteur, colle a une cellule pleine, est la frange d'un moyeu ou d'un flasque bossele (maillage scanne), pas un brin d'aube
 LOOP_MIN_STATIONS = 3  # stations - nombre minimal de rayons dedoubles pour conclure a une boucle
 LOOP_MIN_SECTORS = 3  # secteurs - azimuts voyant de la pale, en deca desquels le rayon n'est pas exploite
 NORMAL_WALL_MARGIN = 0.15  # - - part de la hauteur de veine ecartee contre chaque paroi, ou l'aube n'a que des chants
@@ -222,7 +232,8 @@ GENUS_PER_BLADE_MAX = 3.0  # - - genre maximal admis par pale pour qu'une lectur
 # Import par composants declares (SPEC v2)
 # ---------------------------------------------------------------------------
 SLICE_THICKNESS_MAX = 0.05  # m - epaisseur au-dela de laquelle un solide fluide n'est plus une tranche mince mais un tube, qui ne dit plus ou est la section de reference
-SLICE_ANISOTROPY_MIN = 2.0  # - - rapport minimal entre les deux plus grandes valeurs propres d'inertie et la plus petite, pour qu'une tranche ait une normale isolee
+SLICE_ANISOTROPY_MIN = 1.5  # - - rapport minimal entre le plus grand moment d'inertie (autour de la normale) et le suivant, pour qu'une tranche ait une normale isolee. Une tranche mince tend vers 2 sans l'atteindre (axes perpendiculaires : I_n = I_1 + I_2) ; 1.5 est un disque aussi epais que son rayon. Le seuil valait 2.0, qu'aucune tranche ne passait
+PLANES_DISTINCT_MIN = 0.001  # m - distance minimale entre les centroides des solides d'entree et de sortie : en deca, le sens debitant n'est pas defini
 RECENTRE_TOLERANCE = 0.01  # - - fraction du rayon exterieur en deca de laquelle un centroide colle a l'origine trahit une piece recentree a l'export (SPEC v2 6.1)
 OVERLAP_TOLERANCE = 0.05  # - - recouvrement admis entre boites englobantes de composants, en fraction du plus petit volume (SPEC v2 6.2)
 BLADE_COPY_CLEARANCE = 0.0  # m - jeu minimal exige entre deux copies de pale voisines ; zero, seul le recoupement compte
@@ -235,6 +246,8 @@ DECLARED_BLADES_MAX = 24  # nombre de pales declarable maximal (SPEC v2 2)
 RPM_MAX = 100000.0  # tr/min - regime au-dela duquel l'entree releve de la faute de frappe, pas de la pompe
 GRID_MIN = 20  # cellules - grille minimale en r et en z sous laquelle plus rien ne se resout
 N_THETA_MIN = 24  # secteurs - discretisation azimutale minimale : quatre points par pale a six pales
+GRID_MAX = 2000  # cellules - grille maximale en r et en z : au-dela, memoire et duree explosent sans rien resoudre de plus (100 microns sur une roue de 20 cm)
+N_THETA_MAX = 7200  # secteurs - discretisation azimutale maximale (0.05 degre) ; 1e8 secteurs epuisaient la memoire
 TEMPERATURE_MIN = 1.0  # degres C - borne basse du domaine de la correlation d'Antoine
 TEMPERATURE_MAX = 100.0  # degres C - borne haute du domaine d'Antoine et de la table de masse volumique
 ALTITUDE_MAX = 11000.0  # m - plafond de la troposphere, borne haute du modele d'atmosphere OACI
@@ -246,6 +259,9 @@ ALTITUDE = 0.0  # m - altitude du site (SPEC 6.2)
 TEMPERATURE = 20.0  # degres C - temperature du liquide (SPEC 6.2)
 HAUTEUR_ASPIRATION = 0.0  # m - hauteur d'aspiration, positif = en charge (SPEC 6.2)
 PERTES_ASPIRATION = 0.5  # m - pertes de charge de la conduite d'aspiration (SPEC 6.2)
+HAUTEUR_ASPIRATION_MIN = -30.0  # m - aspiration la plus haute acceptee : trois fois la colonne d'eau atmospherique, au-dela c'est une faute de saisie
+HAUTEUR_ASPIRATION_MAX = 300.0  # m - charge a l'aspiration la plus haute acceptee (reservoir en hauteur) ; au-dela, faute de saisie
+PERTES_ASPIRATION_MAX = 50.0  # m - pertes de charge d'aspiration les plus fortes acceptees ; negatives, elles creeraient de l'energie
 
 # ---------------------------------------------------------------------------
 # Incertitude annoncee du modele 1D (SPEC 7, encadre systematique)

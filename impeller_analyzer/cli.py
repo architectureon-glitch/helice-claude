@@ -228,6 +228,8 @@ def options_from_args(args: argparse.Namespace) -> Options:
 def summarise(result, produced: dict[str, str]) -> str:
     """Resume console de l'analyse."""
     lines = []
+    if result.rejection:
+        lines.append(f"ANALYSE INTERROMPUE : {result.rejection}")
     topology = result.topology
     blades = result.blades
     looped = result.blade_loops is not None and result.blade_loops.looped
@@ -235,7 +237,8 @@ def summarise(result, produced: dict[str, str]) -> str:
         lines.append(
             f"Roue {topology.machine_type}, {topology.blades.n_blades} pales, "
             f"r1s = {topology.r_1s * config.MM_PER_M:.1f} mm, r2 = {topology.r_2 * config.MM_PER_M:.1f} mm, "
-            f"beta1/beta2 = {blades.beta1_deg:.1f}/{blades.beta2_deg:.1f} deg"
+            + (f"beta1/beta2 = {blades.beta1_deg:.1f}/{blades.beta2_deg:.1f} deg"
+               if blades.beta2_deg > 0.0 else "beta1/beta2 non lus")
         )
         if blades.forced_rotation:
             lines.append(f"Sens de rotation : {blades.rotation_label} (impose)")
@@ -262,11 +265,13 @@ def summarise(result, produced: dict[str, str]) -> str:
             f"H = {point.head:7.2f} m, P = {point.shaft_power / config.W_PER_KW:7.2f} kW, "
             f"NPSHr = {point.npshr:5.2f} m"
         )
-    if result.speed_limit is not None:
+    if result.speed_limit is not None and result.speed_limit.computed:
         lines.append(
             f"Vitesse maximale sans cavitation : {result.speed_limit.rpm_max} tr/min "
             f"(limite {result.speed_limit.active_limit})"
         )
+    elif result.speed_limit is not None:
+        lines.append("Vitesse maximale sans cavitation : non calculable (pas de point de fonctionnement)")
     lines.append(f"Confiance globale : {result.overall_confidence()}")
     if result.warnings:
         lines.append(f"{len(result.warnings)} avertissement(s), voir le rapport")
@@ -274,6 +279,25 @@ def summarise(result, produced: dict[str, str]) -> str:
         if key in produced:
             lines.append(f"  ecrit : {produced[key]}")
     return "\n".join(lines)
+
+
+def _internal_error() -> int:
+    """Une exception que l'outil n'a pas prevue : la dire comme telle.
+
+    Le message distingue ce cas d'un fichier invalide -- c'est l'outil qui est
+    en defaut, pas la piece -- et la trace suit, pour que le signalement soit
+    exploitable.
+    """
+    import traceback
+
+    print(
+        "erreur interne de l'outil : ce n'est pas votre fichier qui est en cause, mais un cas "
+        "que l'outil ne sait pas traiter. Aucun resultat n'est ecrit. Joignez le message "
+        "ci-dessous a votre signalement.",
+        file=sys.stderr,
+    )
+    traceback.print_exc()
+    return 3
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -308,8 +332,18 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as error:
         print(f"erreur : {error}", file=sys.stderr)
         return 2
+    except Exception:  # pragma: no cover - filet de derniere instance
+        return _internal_error()
 
-    produced = report.write_all(result, args.out, source=args.fichier, viewer_page=not args.sans_vue3d)
+    try:
+        produced = report.write_all(result, args.out, source=args.fichier, viewer_page=not args.sans_vue3d)
+    except OSError as error:
+        print(
+            f"erreur d'ecriture : impossible d'ecrire les resultats dans {args.out!r} "
+            f"({error.strerror or error}). Choisissez un autre dossier avec --out.",
+            file=sys.stderr,
+        )
+        return 2
     if not args.quiet:
         print(summarise(result, produced))
     return 0

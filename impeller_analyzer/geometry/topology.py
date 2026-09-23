@@ -34,6 +34,11 @@ class BladeCount:
     ratio_to_runner_up: float = 0.0  # rapport a la deuxieme amplitude, toutes harmoniques
     ratio_to_competing: float = 0.0  # rapport a la plus forte harmonique non multiple de N
     hausdorff_relative: float | None = None  # distance apres rotation de 2*pi/N, rapportee a r_tip
+    # Periodicite propre de la piece -- ecart apres 2*pi/N pour le N qu'elle porte,
+    # detecte ou corrige -- independante du nombre impose : c'est elle qui dit si
+    # la piece est une roue reguliere.
+    periodic_order: int = 0
+    periodicity: float | None = None
     confidence: str = LOW
     forced: bool = False  # vrai si la valeur vient de --blades
     warnings: list[str] = field(default_factory=list)
@@ -45,6 +50,8 @@ class BladeCount:
             "rapport_a_la_suivante": self.ratio_to_runner_up,
             "rapport_aux_harmoniques_concurrentes": self.ratio_to_competing,
             "hausdorff_relatif": self.hausdorff_relative,
+            "ordre_de_periodicite_de_la_piece": self.periodic_order or None,
+            "ecart_de_periodicite_de_la_piece": self.periodicity,
             "impose_par_l_utilisateur": self.forced,
             "confiance": self.confidence,
             "avertissements": list(self.warnings),
@@ -118,6 +125,9 @@ def count_blades(
     occupancy: OccupancyMap,
     mesh: TriMesh | None = None,
     forced: int | None = None,
+    samples: int = config.HAUSDORFF_SAMPLES,
+    cap: float = config.HAUSDORFF_CAP,
+    verdict_only: bool = False,
 ) -> BladeCount:
     """Compte les pales par transformee de Fourier du signal `g(theta)`.
 
@@ -176,18 +186,52 @@ def count_blades(
                 "fournissez --blades si le nombre de pales est connu"
             )
 
-    # Controle croise : rotation de 2*pi/N et distance de Hausdorff relative.
-    if mesh is not None and result.n_blades >= config.BLADES_MIN and occupancy.r_max > 0.0:
-        rotated = mesh.transformed(rotation_matrix((0.0, 0.0, 1.0), 2.0 * math.pi / result.n_blades))
-        distance = hausdorff_distance(mesh, rotated)
-        result.hausdorff_relative = distance / occupancy.r_max
-        if result.hausdorff_relative > config.SYM_TOL:
-            result.confidence = worst(result.confidence, MEDIUM)
-            result.warnings.append(
-                f"la rotation de 2*pi/{result.n_blades} ne superpose pas le maillage a lui-meme "
-                f"(Hausdorff {result.hausdorff_relative:.3f} du rayon exterieur, seuil {config.SYM_TOL}) : "
-                "pales inegales, roue tronquee ou nombre de pales errone"
+    def ecart(order: int, points: int, verdict: bool) -> float:
+        """Hausdorff relatif apres 2*pi/order ; borne inferieure si `verdict`."""
+        rotated = mesh.transformed(rotation_matrix((0.0, 0.0, 1.0), 2.0 * math.pi / order))
+        stop = config.SYM_TOL * occupancy.r_max if verdict else math.inf
+        return hausdorff_distance(
+            mesh, rotated, points, cap * occupancy.r_max, stop
+        ) / occupancy.r_max
+
+    checkable = mesh is not None and occupancy.r_max > 0.0
+
+    # Periodicite propre de la piece, au nombre que le spectre lui lit. Le
+    # spectre a pu retenir une harmonique de la forme d'aube plutot que le
+    # nombre d'aubes : une roue de 3 aubes en boucle rend un pic en 9. La
+    # periodicite, elle, ne se trompe pas -- la piece se superpose a elle-meme
+    # ou non. On essaie les diviseurs du nombre lu et les harmoniques les plus
+    # fortes, et l'on retient le plus grand ordre qui tient : une roue de 6
+    # aubes tient aussi en 3 et en 2.
+    # `verdict_only` : l'appelant ne veut savoir que si la piece tient sous
+    # SYM_TOL -- c'est le cas du departage des axes candidats.
+    if checkable and result.n_blades >= config.BLADES_MIN:
+        lu = result.n_blades
+        result.periodic_order = lu
+        result.periodicity = ecart(lu, samples, verdict_only)
+        if result.periodicity > config.SYM_TOL:
+            fortes = sorted(candidates, key=lambda k: amplitudes[k], reverse=True)[: config.PERIOD_CANDIDATES]
+            essais = sorted(
+                {k for k in fortes if k != lu} | {d for d in range(config.BLADES_MIN, lu) if lu % d == 0},
+                reverse=True,
             )
+            for order in essais:
+                if amplitudes[order] <= 0.0:
+                    continue
+                if ecart(order, config.AXIS_PROBE_SAMPLES, True) <= config.SYM_TOL:
+                    result.periodic_order = order
+                    result.periodicity = ecart(order, samples, verdict_only)
+                    result.n_blades = order
+                    result.confidence = MEDIUM
+                    result.warnings.append(
+                        f"le spectre angulaire designait {lu} pales, mais la piece ne se superpose "
+                        f"pas a elle-meme apres 2*pi/{lu} ; elle le fait apres 2*pi/{order}. "
+                        f"C'est {order} qui est retenu : le pic en {lu} est une harmonique de la "
+                        "forme des aubes, pas leur nombre. Confiance moyenne ; imposez --blades si "
+                        "vous connaissez la roue."
+                    )
+                    break
+        result.hausdorff_relative = result.periodicity
 
     if forced is not None:
         if result.n_blades and forced != result.n_blades:
@@ -197,7 +241,82 @@ def count_blades(
         result.n_blades = int(forced)
         result.forced = True
         result.confidence = HIGH
+        # Le controle porte aussi sur le nombre **retenu** : c'est lui qui
+        # nourrit le calcul. Il ne portait que sur le nombre detecte, si bien
+        # qu'un nombre impose que la geometrie dementait passait en confiance
+        # haute. Une declaration n'est pas annulee pour autant : elle est
+        # accompagnee.
+        if checkable and result.n_blades >= config.BLADES_MIN:
+            result.hausdorff_relative = (
+                result.periodicity if result.n_blades == result.periodic_order
+                else ecart(result.n_blades, samples, verdict_only)
+            )
+
+    if result.hausdorff_relative is not None and result.hausdorff_relative > config.SYM_TOL:
+        result.confidence = worst(result.confidence, MEDIUM)
+        cause = (
+            "le nombre impose ne correspond pas a la periodicite de la piece, ou les pales "
+            "sont inegales"
+            if result.forced
+            else "pales inegales, roue tronquee ou nombre de pales errone"
+        )
+        result.warnings.append(
+            f"la rotation de 2*pi/{result.n_blades} ne superpose pas le maillage a lui-meme "
+            f"(Hausdorff {result.hausdorff_relative:.3f} du rayon exterieur, seuil {config.SYM_TOL}) : "
+            f"{cause}"
+        )
     return result
+
+
+def has_full_ring(occupancy: OccupancyMap) -> bool:
+    """Vrai si au moins une cellule de la carte est pleine sur tout le tour.
+
+    Moyeu plein, moyeu alese, flasque, jante : toute roue a un anneau de matiere
+    qui tient ses pales ensemble autour de l'axe. Deux pieces posees cote a cote
+    peuvent se superposer par un demi-tour -- deux roues identiques le font --
+    sans qu'aucun cercle centre sur l'axe ne soit entierement dans la matiere.
+    """
+    return any(value >= config.F_SOLIDE for row in occupancy.f for value in row)
+
+
+def admissibility(blades: "BladeCount", occupancy: OccupancyMap | None = None) -> str | None:
+    """Motif de refus si la piece n'est pas une roue reguliere autour de l'axe retenu.
+
+    Une roue de N pales se superpose a elle-meme apres une rotation de 2*pi/N :
+    c'est la seule propriete que tout le calcul suppose sans jamais la dire.
+    Mesuree sur des roues valides, l'ecart reste sous 2 % du rayon exterieur,
+    meme maillage dechire. Au-dela de `SYM_REJECT`, ce n'est plus une roue
+    imparfaite, c'est une piece que le modele ne decrit pas : un corps parasite
+    exporte avec la roue, deux pieces dans le meme fichier, un carter, un axe
+    detecte de travers. Publier une hauteur et un debit, meme en confiance
+    faible, laisserait croire a une estimation incertaine la ou il n'y a pas
+    d'estimation du tout. `None` si la piece est recevable ou non verifiee.
+    """
+    if occupancy is not None and occupancy.nr and not has_full_ring(occupancy):
+        return (
+            "aucun anneau de matiere ne fait le tour de l'axe retenu : ni moyeu, ni alesage, ni "
+            "flasque, ni jante. Une roue en a toujours un, qui tient ses pales ensemble ; ce "
+            "fichier contient plutot plusieurs pieces disjointes, une pale seule, ou une piece "
+            "dont l'axe a ete mal detecte. Aucune performance n'est publiee : exportez la roue "
+            "entiere, seule dans le fichier. Pour analyser une pale isolee, utilisez le mode "
+            "composants (--pale, --entree-fluide, --sortie-fluide)."
+        )
+    # La periodicite **propre** de la piece, pas l'ecart au nombre impose : un
+    # nombre declare faux est une declaration a accompagner d'un avertissement,
+    # pas une raison de refuser une roue reguliere.
+    ecart = blades.periodicity
+    if ecart is None or ecart <= config.SYM_REJECT:
+        return None
+    borne = "au moins " if ecart >= config.HAUSDORFF_CAP - 1e-9 else ""
+    return (
+        f"la piece ne se superpose pas a elle-meme apres une rotation de 2*pi/{blades.periodic_order} "
+        f"autour de l'axe retenu : ecart de {borne}{ecart:.0%} du rayon exterieur, pour {config.SYM_REJECT:.0%} "
+        "admis. Ce n'est pas une roue reguliere autour de cet axe -- corps parasite exporte avec "
+        "la roue, plusieurs pieces dans le meme fichier, carter ou volute inclus, ou axe mal "
+        "detecte. Aucune performance n'est publiee : isolez la roue seule dans le fichier. Si le "
+        "nombre de pales est faux, imposez-le par --blades ; si les pales sont volontairement "
+        "inegales, --sans-controle-symetrie leve ce controle, a vos risques."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -581,8 +700,23 @@ def apply_user_suction_radius(topology: Topology, r_aspiration_cm: float | None)
             )
         return topology
     value = float(r_aspiration_cm) * config.UNIT_FACTOR
-    if value <= 0.0:
+    if not (math.isfinite(value) and value > 0.0):
         raise ValueError("--r-aspiration doit etre strictement positif")
+    # Un rayon impose prime sur la detection, mais pas sur la piece elle-meme :
+    # hors de la roue, ou dans son moyeu, ce n'est plus une lecture differente,
+    # c'est une faute d'unite (l'option est en centimetres).
+    if topology.r_tip > 0.0 and value > topology.r_tip:
+        raise ValueError(
+            f"rayon d'aspiration impose a {value * config.MM_PER_M:.1f} mm, plus grand que la "
+            f"roue elle-meme ({topology.r_tip * config.MM_PER_M:.1f} mm de rayon exterieur). "
+            "--r-aspiration s'exprime en centimetres."
+        )
+    if value <= topology.r_1h:
+        raise ValueError(
+            f"rayon d'aspiration impose a {value * config.MM_PER_M:.1f} mm, dans le moyeu "
+            f"({topology.r_1h * config.MM_PER_M:.1f} mm) : la section d'entree serait negative. "
+            "--r-aspiration s'exprime en centimetres."
+        )
     if topology.r_1s > 0.0 and abs(value - topology.r_1s) / topology.r_1s > config.VALID_GEOM_TOL:
         topology.warnings.append(
             f"rayon d'aspiration impose a {value * config.MM_PER_M:.1f} mm alors que la detection "

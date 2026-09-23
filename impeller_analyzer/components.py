@@ -231,7 +231,11 @@ def load_component(slot: str, path: str, unit: str | float | None = "cm") -> Com
     l'axe et que l'origine est celle de la CAO.  Les recaler ici detruirait
     l'assemblage, puisque c'est leur position relative qui porte l'information.
     """
-    mesh, report = loader.load_mesh(path, unit=unit)
+    try:
+        mesh, report = loader.load_mesh(path, unit=unit)
+    except loader.ImportError_ as error:
+        # Cinq emplacements, cinq fichiers : l'erreur doit dire lequel.
+        raise loader.ImportError_(f"emplacement « {slot} » : {error}") from None
     low, high = mesh.bounds()
     return Component(
         slot=slot,
@@ -355,11 +359,35 @@ def _box_overlap(a: Component, b: Component) -> float:
     return overlap / smallest if smallest > 0.0 else 0.0
 
 
+def check_distinct_planes(assembly: ComponentAssembly) -> Check:
+    """Entree et sortie distinctes : sans elles, le sens debitant n'existe pas.
+
+    Le meme fichier donne pour les deux emplacements -- ou deux tranches
+    superposees -- rend un vecteur nul, que la normalisation changeait sans
+    rien dire en +Z. Le sens de rotation en etait ensuite deduit. Le controle
+    est **bloquant** : tout ce que le mode apporte en depend.
+    """
+    check = Check(name="plans distincts", blocking=True)
+    inlet, outlet = assembly.inlet, assembly.outlet
+    gap = math.dist(inlet.centroid, outlet.centroid)
+    if gap < config.PLANES_DISTINCT_MIN:
+        check.passed = False
+        check.detail = (
+            f"les solides d'entree et de sortie sont confondus (centroides a "
+            f"{gap * config.MM_PER_M:.2f} mm l'un de l'autre) : le sens debitant n'est pas "
+            "defini, ni rien de ce qui en decoule. Verifiez que les deux emplacements ne "
+            "designent pas le meme fichier."
+        )
+    else:
+        check.detail = f"entree et sortie distantes de {gap * config.MM_PER_M:.1f} mm"
+    return check
+
+
 def check_common_frame(assembly: ComponentAssembly) -> Check:
     """1. Repere commun : une piece recentree a l'export detruit l'assemblage.
 
-    C'est le seul controle **bloquant** de la liste, et pour une raison precise :
-    sa violation ne se voit sur aucune grandeur publiee.  Les pieces se lisent
+    C'est l'un des deux controles **bloquants**, avec les plans distincts, et
+    pour une raison precise : sa violation ne se voit sur aucune grandeur publiee.  Les pieces se lisent
     toutes correctement, chacune dans son coin, et seule leur position relative
     -- donc tout ce que le mode composants apporte -- est fausse.
     """
@@ -645,6 +673,7 @@ def assemble(
     assembly.axis_origin = axis_origin(assembly.inlet, assembly.outlet)
 
     assembly.checks = [
+        check_distinct_planes(assembly),
         check_common_frame(assembly),
         check_no_interpenetration(assembly),
         check_blade_between_planes(assembly),

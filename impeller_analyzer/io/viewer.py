@@ -438,10 +438,25 @@ def _palette_css(page: str) -> str:
     return page
 
 
+def _script_safe(payload_json: str) -> str:
+    """JSON inerte dans un element `<script>`.
+
+    Le JSON y est lu par l'analyseur HTML avant de l'etre par JavaScript : une
+    chaine contenant `</script>` fermerait l'element, et `<!--` le ferait entrer
+    dans un etat ou la page ne se ferme plus. Les chevrons et l'esperluette
+    sont donc ecrits en echappements unicode, que JSON et JavaScript relisent a
+    l'identique.
+    """
+    return (
+        payload_json.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    )
+
+
 def _fill(payload_json: str, server: bool) -> str:
     """Injecte la charge utile, le mode et le port par defaut dans le gabarit."""
     return (
-        _palette_css(_TEMPLATE).replace("__DONNEES__", payload_json)
+        _palette_css(_TEMPLATE).replace("__DONNEES__", _script_safe(payload_json))
         .replace("__SERVEUR__", "true" if server else "false")
         .replace("__PORT__", str(config.SERVER_PORT))
     )

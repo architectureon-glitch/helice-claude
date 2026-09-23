@@ -18,6 +18,7 @@ dupliques, reparation, rapport d'import.
 
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import struct
@@ -26,7 +27,7 @@ import tempfile
 from dataclasses import dataclass, field, asdict
 
 from .. import config
-from ..confidence import HIGH, MEDIUM, ConfidenceMap
+from ..confidence import HIGH, LOW, MEDIUM, ConfidenceMap
 from ..mesh import TriMesh
 from . import repair as repair_module
 
@@ -82,8 +83,8 @@ def unit_factor(unit: str | float | None) -> tuple[str, float]:
         return "cm", config.UNIT_FACTOR
     if isinstance(unit, (int, float)):
         value = float(unit)
-        if value <= 0.0:
-            raise ImportError_("le facteur d'unite doit etre strictement positif")
+        if not (math.isfinite(value) and value > 0.0):
+            raise ImportError_("le facteur d'unite doit etre un nombre fini strictement positif")
         return f"x{value:g}", value
     name = str(unit).strip().lower()
     if name in config.UNIT_FACTORS:
@@ -93,8 +94,8 @@ def unit_factor(unit: str | float | None) -> tuple[str, float]:
     except ValueError:
         known = ", ".join(sorted(config.UNIT_FACTORS))
         raise ImportError_(f"unite inconnue : {unit!r} (attendu : {known}, ou un facteur numerique)") from None
-    if value <= 0.0:
-        raise ImportError_("le facteur d'unite doit etre strictement positif")
+    if not (math.isfinite(value) and value > 0.0):
+        raise ImportError_("le facteur d'unite doit etre un nombre fini strictement positif")
     return f"x{value:g}", value
 
 
@@ -106,46 +107,27 @@ def _polygon_to_triangles(indices: list[int]) -> list[tuple[int, int, int]]:
     return [(indices[0], indices[i], indices[i + 1]) for i in range(1, len(indices) - 1)]
 
 
-def read_stl(path: str) -> TriMesh:
-    """Lit un STL binaire ou ASCII."""
-    with open(path, "rb") as handle:
-        head = handle.read(84)
-        handle.seek(0)
-        payload = handle.read()
-    if len(payload) < 84:
-        raise ImportError_(
-            f"fichier STL inexploitable : {len(payload)} octets, en-tete incomplet. "
-            "Le fichier est tronque, ou ce n'est pas un STL."
-        )
-    is_binary = True
-    if head[:5].lower().lstrip() .startswith(b"solid"):
-        # Un STL ASCII commence par "solid" ; on confirme par la taille attendue.
-        if len(payload) >= 84:
-            count = struct.unpack("<I", payload[80:84])[0]
-            is_binary = len(payload) == 84 + 50 * count
-        else:
-            is_binary = False
-    if is_binary:
-        count = struct.unpack("<I", payload[80:84])[0]
-        expected = 84 + 50 * count
-        if len(payload) < expected:
-            raise ImportError_(f"STL binaire tronque : {len(payload)} octets pour {count} triangles annonces")
-        vertices: list[tuple[float, float, float]] = []
-        faces: list[tuple[int, int, int]] = []
-        offset = 84
-        for _ in range(count):
-            values = struct.unpack_from("<12fH", payload, offset)
-            offset += 50
-            base = len(vertices)
-            vertices.append((values[3], values[4], values[5]))
-            vertices.append((values[6], values[7], values[8]))
-            vertices.append((values[9], values[10], values[11]))
-            faces.append((base, base + 1, base + 2))
-        return TriMesh(vertices, faces)
+def _read_stl_binary(payload: bytes, count: int) -> TriMesh:
+    """Triangles d'un STL binaire dont on sait deja qu'il contient `count` facettes."""
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+    offset = 84
+    for _ in range(count):
+        values = struct.unpack_from("<12fH", payload, offset)
+        offset += 50
+        base = len(vertices)
+        vertices.append((values[3], values[4], values[5]))
+        vertices.append((values[6], values[7], values[8]))
+        vertices.append((values[9], values[10], values[11]))
+        faces.append((base, base + 1, base + 2))
+    return TriMesh(vertices, faces)
 
+
+def _read_stl_ascii(payload: bytes) -> TriMesh | None:
+    """Triangles d'un STL ASCII ; `None` si le texte ne contient aucune facette."""
     text = payload.decode("utf-8", errors="replace")
-    vertices = []
-    faces = []
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
     current: list[tuple[float, float, float]] = []
     for line in text.splitlines():
         parts = line.split()
@@ -160,8 +142,52 @@ def read_stl(path: str) -> TriMesh:
                 faces.extend(_polygon_to_triangles(list(range(base, base + len(current)))))
             current = []
     if not faces:
-        raise ImportError_("STL ASCII sans triangle exploitable")
+        return None
     return TriMesh(vertices, faces)
+
+
+def _looks_like_text(payload: bytes) -> bool:
+    """Vrai si les premiers octets sont du texte imprimable (donc pas un binaire)."""
+    sample = payload[:512]
+    printable = sum(1 for byte in sample if byte in (9, 10, 13) or 32 <= byte < 127)
+    return printable >= 0.95 * len(sample)
+
+
+def read_stl(path: str) -> TriMesh:
+    """Lit un STL binaire ou ASCII.
+
+    Le mot `solid` en tete ne suffit pas a trancher : SolidWorks et d'autres
+    ecrivent des STL binaires dont l'en-tete de 80 octets commence par lui, et
+    certains exportateurs completent le fichier par quelques octets de
+    bourrage. On lit donc en ASCII quand le texte y ressemble, et l'on retombe
+    sur le binaire si le texte ne contient aucune facette alors que le nombre
+    de triangles annonce tient dans le fichier.
+    """
+    with open(path, "rb") as handle:
+        payload = handle.read()
+    if len(payload) < 84 and not payload.lstrip()[:5].lower() == b"solid":
+        raise ImportError_(
+            f"fichier STL inexploitable : {len(payload)} octets, en-tete incomplet. "
+            "Le fichier est tronque, ou ce n'est pas un STL."
+        )
+    count = struct.unpack("<I", payload[80:84])[0] if len(payload) >= 84 else 0
+    expected = 84 + 50 * count
+    binary_fits = len(payload) >= 84 and count > 0 and len(payload) >= expected
+    if payload.lstrip()[:5].lower() == b"solid" and len(payload) != expected:
+        mesh = _read_stl_ascii(payload)
+        if mesh is not None:
+            return mesh
+        if binary_fits:
+            return _read_stl_binary(payload, count)
+        raise ImportError_("STL ASCII sans triangle exploitable")
+    if len(payload) < expected:
+        if _looks_like_text(payload):
+            raise ImportError_(
+                "ce fichier est du texte, mais pas un STL ASCII : il ne commence pas par "
+                "'solid'. Verifiez qu'il s'agit bien de l'export maillage de la roue."
+            )
+        raise ImportError_(f"STL binaire tronque : {len(payload)} octets pour {count} triangles annonces")
+    return _read_stl_binary(payload, count)
 
 
 def read_obj(path: str) -> TriMesh:
@@ -192,28 +218,41 @@ def read_obj(path: str) -> TriMesh:
 
 
 def read_off(path: str) -> TriMesh:
-    """Lit un OFF ASCII."""
-    tokens: list[str] = []
+    """Lit un OFF ASCII (et ses variantes COFF, NOFF...).
+
+    La lecture se fait ligne par ligne, et non comme un flot de nombres : une
+    face peut etre suivie de sa couleur sur la meme ligne (`3 0 1 2 255 0 0`),
+    un sommet de sa couleur ou de sa normale. Seuls les premiers champs de
+    chaque ligne font partie de la geometrie.
+    """
+    lines: list[list[str]] = []
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
-            line = line.split("#")[0]
-            tokens.extend(line.split())
-    if not tokens or not tokens[0].upper().endswith("OFF"):
+            parts = line.split("#")[0].split()
+            if parts:
+                lines.append(parts)
+    if not lines or not lines[0][0].upper().endswith("OFF"):
         raise ImportError_("en-tete OFF absent")
+    header = lines[0][1:]
     cursor = 1
-    n_vertices = int(tokens[cursor])
-    n_faces = int(tokens[cursor + 1])
-    cursor += 3  # on saute le nombre d'aretes, non utilise
+    if not header:
+        header = lines[1]
+        cursor = 2
+    n_vertices = int(header[0])
+    n_faces = int(header[1])
     vertices = []
-    for _ in range(n_vertices):
-        vertices.append((float(tokens[cursor]), float(tokens[cursor + 1]), float(tokens[cursor + 2])))
-        cursor += 3
+    for parts in lines[cursor:cursor + n_vertices]:
+        vertices.append((float(parts[0]), float(parts[1]), float(parts[2])))
+    cursor += n_vertices
+    if len(vertices) < n_vertices:
+        raise ImportError_(f"OFF tronque : {len(vertices)} sommets lus sur {n_vertices} annonces")
     faces: list[tuple[int, int, int]] = []
-    for _ in range(n_faces):
-        count = int(tokens[cursor])
-        cursor += 1
-        indices = [int(tokens[cursor + i]) for i in range(count)]
-        cursor += count
+    face_lines = lines[cursor:cursor + n_faces]
+    if len(face_lines) < n_faces:
+        raise ImportError_(f"OFF tronque : {len(face_lines)} faces lues sur {n_faces} annoncees")
+    for parts in face_lines:
+        count = int(parts[0])
+        indices = [int(parts[1 + i]) for i in range(count)]
         if count >= 3:
             faces.extend(_polygon_to_triangles(indices))
     return TriMesh(vertices, faces)
@@ -243,6 +282,9 @@ def read_ply(path: str) -> TriMesh:
     header = payload[:position].decode("ascii", errors="replace")
 
     fmt = "ascii"
+    # Une face peut porter plusieurs listes (indices, coordonnees de texture...) :
+    # seule `vertex_indices` (ou `vertex_index`) decrit la geometrie.
+    index_lists = ("vertex_indices", "vertex_index")
     elements: list[tuple[str, int, list[tuple]]] = []
     for line in header.splitlines():
         parts = line.split()
@@ -275,8 +317,10 @@ def read_ply(path: str) -> TriMesh:
                     else:
                         length = int(tokens[cursor])
                         cursor += 1
-                        indices = [int(tokens[cursor + i]) for i in range(length)]
+                        listed = [int(float(tokens[cursor + i])) for i in range(length)]
                         cursor += length
+                        if prop[3] in index_lists or not indices:
+                            indices = listed
                 if name == "vertex":
                     vertices.append((values.get("x", 0.0), values.get("y", 0.0), values.get("z", 0.0)))
                 elif name == "face" and len(indices) >= 3:
@@ -298,8 +342,10 @@ def read_ply(path: str) -> TriMesh:
                         length = struct.unpack_from(endian + code, payload, offset)[0]
                         offset += size
                         code, size = _PLY_TYPES[prop[2]]
-                        indices = list(struct.unpack_from(f"{endian}{length}{code}", payload, offset))
+                        listed = list(struct.unpack_from(f"{endian}{length}{code}", payload, offset))
                         offset += size * length
+                        if prop[3] in index_lists or not indices:
+                            indices = [int(i) for i in listed]
                 if name == "vertex":
                     vertices.append((float(values.get("x", 0.0)), float(values.get("y", 0.0)), float(values.get("z", 0.0))))
                 elif name == "face" and len(indices) >= 3:
@@ -376,6 +422,12 @@ def read_dxf_native(path: str) -> TriMesh:
     Ce sont les deux formes sous lesquelles un maillage tesselle sort le plus
     souvent d'AutoCAD ; les MESH et les 3DSOLID non tesselles demandent `ezdxf`.
     """
+    with open(path, "rb") as handle:
+        if handle.read(18) == b"AutoCAD Binary DXF":
+            raise ImportError_(
+                f"{os.path.basename(path)} est un DXF binaire, que le lecteur interne ne lit pas : "
+                "reenregistrez-le en DXF ASCII, ou exportez la roue en STL"
+            )
     vertices: list[tuple[float, float, float]] = []
     faces: list[tuple[int, int, int]] = []
 
@@ -539,7 +591,7 @@ def _guard(reader, path: str) -> TriMesh:
         return reader(path)
     except ImportError_:
         raise
-    except (struct.error, ValueError, IndexError, KeyError, UnicodeDecodeError) as error:
+    except (struct.error, ValueError, IndexError, KeyError, UnicodeDecodeError, OverflowError) as error:
         raise ImportError_(
             f"{os.path.basename(path)} : contenu illisible pour un fichier "
             f"{os.path.splitext(path)[1].lower()} ({error}). Le fichier est peut-etre tronque, "
@@ -583,6 +635,33 @@ def read_raw(path: str, prefer_trimesh: bool = True) -> tuple[TriMesh, str]:
     raise ImportError_(f"extension non geree : {extension!r} (formats lus : {known})")
 
 
+def check_integrity(mesh: TriMesh, path: str) -> None:
+    """Refuse un maillage dont les indices ou les coordonnees sont corrompus.
+
+    Deux defauts qu'aucune reparation ne sait corriger sans inventer de la
+    geometrie : une face qui designe un sommet inexistant (OBJ indexe a partir
+    de zero, fichier tronque au milieu des sommets), et une coordonnee non
+    finie (NaN, infini) ecrite par un exportateur defaillant. Les laisser
+    passer, c'est obtenir plus loin une exception sans rapport avec la cause,
+    ou pire, des chiffres calcules sur une piece qui n'est pas la bonne.
+    """
+    name = os.path.basename(path)
+    n_vertices = len(mesh.vertices)
+    bad_faces = sum(1 for face in mesh.faces if min(face) < 0 or max(face) >= n_vertices)
+    if bad_faces:
+        raise ImportError_(
+            f"{name} : {bad_faces} face(s) sur {len(mesh.faces)} designent un sommet qui "
+            f"n'existe pas (le fichier en compte {n_vertices}). Le fichier est tronque ou "
+            "corrompu ; reexportez-le."
+        )
+    bad_vertices = sum(1 for vertex in mesh.vertices if not all(math.isfinite(c) for c in vertex))
+    if bad_vertices:
+        raise ImportError_(
+            f"{name} : {bad_vertices} sommet(s) ont une coordonnee non finie (NaN ou infini). "
+            "L'exportateur a ecrit des valeurs invalides ; reexportez la piece."
+        )
+
+
 def load_mesh(
     path: str,
     unit: str | float | None = None,
@@ -598,6 +677,7 @@ def load_mesh(
     (SPEC phase 1, point 3).
     """
     mesh, backend = read_raw(path, prefer_trimesh=prefer_trimesh)
+    check_integrity(mesh, path)
     name, factor = unit_factor(unit)
 
     report = ImportReport(
@@ -644,6 +724,25 @@ def load_mesh(
             "maillage non etanche apres reparation : les grandeurs volumiques sont plafonnees "
             f"a la confiance 'medium' ({len(mesh.boundary_edges())} aretes de bord restantes)"
         )
+    # Coordonnees lointaines : un export en simple precision (STL binaire, et
+    # la plupart des ASCII a sept chiffres) ne resout pas mieux qu'une fraction
+    # 2^-24 de la plus grande coordonnee. Une piece exportee dans le repere d'un
+    # plan de masse, a quelques kilometres de l'origine, y perd ses details.
+    extent = max(report.extents_mm) / config.MM_PER_M
+    farthest = max(max(abs(c) for c in lo), max(abs(c) for c in hi))
+    if extent > 0.0:
+        resolution = farthest * config.FLOAT32_EPS
+        relative = resolution / extent
+        if relative > config.FLOAT32_WARN:
+            report.warnings.append(
+                f"la piece est a {farthest:.0f} m de l'origine du fichier pour {extent * config.MM_PER_M:.0f} mm "
+                f"d'encombrement : un export en simple precision (STL binaire) n'y resout que "
+                f"{resolution * config.MM_PER_M:.3f} mm, soit {relative:.2%} de la piece. Exportez-la "
+                "pres de l'origine, ou dans un format a double precision."
+            )
+        if relative > config.FLOAT32_LOW:
+            report.confidence.set("maillage", LOW)
+            report.confidence.set("volume", LOW)
     if report.volume_m3 <= 0.0:
         report.warnings.append(
             "volume signe negatif ou nul : orientation des normales incertaine, "

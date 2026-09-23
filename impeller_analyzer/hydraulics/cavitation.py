@@ -148,9 +148,20 @@ class SpeedLimit:
     confidence: str = ""
     warnings: list[str] = field(default_factory=list)
 
+    @property
+    def computed(self) -> bool:
+        """Vrai si une limite a ete chiffree.
+
+        Zero tr/min peut etre une reponse -- une installation dont le NPSH
+        disponible est negatif ne tolere aucun regime -- ou l'absence de reponse,
+        faute de point nominal. Seul le premier cas est un resultat.
+        """
+        return bool(self.active_limit) and math.isfinite(min(self.rpm_max_npsh, self.rpm_max_w1s))
+
     def to_dict(self) -> dict:
         """Vue serialisable en JSON."""
         return {
+            "calculee": self.computed,
             "regime_de_reference_tr_min": self.rpm_reference,
             "NPSHr_de_reference_m": self.npshr_reference,
             "w1s_de_reference_m_s": self.w1s_reference,

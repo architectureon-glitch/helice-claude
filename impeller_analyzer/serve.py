@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import http.server
 import json
+import math
 import os
 import shutil
 import socketserver
@@ -105,9 +106,12 @@ def _float(query: dict, key: str, default=None):
     if not raw:
         return default
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
         raise BadRequest(f"« {key} » doit etre un nombre, or « {raw} » n'en est pas un") from None
+    if not math.isfinite(value):
+        raise BadRequest(f"« {key} » doit etre un nombre fini, or « {raw} » ne l'est pas")
+    return value
 
 
 def _int(query: dict, key: str, default=None):
@@ -221,6 +225,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "impeller-analyzer"
     store: Store
     page: str
+    #: Noms sous lesquels le serveur accepte d'etre appele ; vide : pas de controle.
+    allowed_hosts: frozenset = frozenset()
+
+    def _foreign(self) -> bool:
+        """Vrai si la requete ne vient pas de la page servie par ce serveur.
+
+        Un serveur local repond a toute page ouverte dans le navigateur. Une page
+        malveillante peut lui poster un fichier (requete inter-origines), ou se
+        faire passer pour lui en faisant pointer son propre nom de domaine sur
+        127.0.0.1 (rebinding DNS). L'en-tete `Host` doit donc nommer ce serveur,
+        et l'en-tete `Origin`, quand le navigateur l'envoie, cette meme page.
+        """
+        if not self.allowed_hosts:
+            return False
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host not in self.allowed_hosts:
+            return True
+        origin = (self.headers.get("Origin") or "").strip().lower()
+        return bool(origin) and origin not in {f"http://{name}" for name in self.allowed_hosts}
 
     def log_message(self, fmt, *args):  # pragma: no cover - bruit de console
         """Journal reduit : une ligne par requete, sans l'horodatage complet."""
@@ -245,6 +268,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # -- routes -----------------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802 - nom impose par BaseHTTPRequestHandler
         """Sert la page, un fichier produit, ou 404."""
+        if self._foreign():
+            self._send(403, b"requete refusee : origine etrangere", "text/plain; charset=utf-8")
+            return
         route = urllib.parse.urlparse(self.path).path
         if route in ("/", "/index.html"):
             self._send(200, self.page.encode("utf-8"), "text/html; charset=utf-8")
@@ -272,6 +298,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         """Recoit le fichier depose et renvoie le resultat de l'analyse."""
+        if self._foreign():
+            self._json(403, {"erreur": "requete refusee : elle ne vient pas de la page de l'application"})
+            return
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path != "/analyse":
             self._json(404, {"erreur": "route inconnue"})
@@ -312,8 +341,16 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 def build_server(host: str = config.SERVER_HOST, port: int = config.SERVER_PORT) -> tuple[Server, Store]:
     """Prepare le serveur et son magasin d'analyses."""
     store = Store(tempfile.mkdtemp(prefix="impeller-app-"))
-    handler = type("BoundHandler", (Handler,), {"store": store, "page": viewer.build_app_page()})
-    return Server((host, port), handler), store
+    server = Server((host, port), Handler)
+    port = server.server_address[1]  # port effectif, y compris quand 0 en laisse le choix au systeme
+    allowed: frozenset = frozenset()
+    if host in ("127.0.0.1", "localhost", "::1"):
+        allowed = frozenset({f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"})
+    server.RequestHandlerClass = type(
+        "BoundHandler", (Handler,),
+        {"store": store, "page": viewer.build_app_page(), "allowed_hosts": allowed},
+    )
+    return server, store
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - point d'entree

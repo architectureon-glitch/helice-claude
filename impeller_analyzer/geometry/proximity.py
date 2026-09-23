@@ -97,13 +97,21 @@ class TriangleGrid:
         """Index de cellule le long d'un axe."""
         return int(math.floor((value - self.origin[axis]) / self.cell))
 
-    def distance(self, point: Sequence[float]) -> float:
-        """Distance exacte du point a la surface du maillage."""
+    def distance(self, point: Sequence[float], cap: float = math.inf) -> float:
+        """Distance exacte du point a la surface du maillage, ecretee a `cap`.
+
+        La recherche s'etend par couronnes de cellules ; quand la surface la plus
+        proche est loin -- une piece qui ne se superpose pas a elle-meme --, elle
+        balayait tout l'espace pour chaque point. Au-dela de `cap`, la reponse
+        exacte n'apprend plus rien a l'appelant : on s'arrete et l'on rend `cap`.
+        """
         base = tuple(self._axis_index(point[k], k) for k in range(3))
         best = math.inf
         ring = 0
         max_ring = config.PROXIMITY_CELLS * 2 + 2
         while ring <= max_ring:
+            if (ring - 1) * self.cell >= cap:
+                return min(best, cap)
             candidates: set[int] = set()
             for dx in range(-ring, ring + 1):
                 for dy in range(-ring, ring + 1):
@@ -130,19 +138,26 @@ def hausdorff_distance(
     mesh_a: TriMesh,
     mesh_b: TriMesh,
     samples: int = config.HAUSDORFF_SAMPLES,
+    cap: float = math.inf,
+    stop_above: float = math.inf,
 ) -> float:
     """Distance de Hausdorff symetrique approchee entre deux maillages.
 
     Les points sont echantillonnes sur les surfaces (ponderation par l'aire,
     suite deterministe), puis leur distance a l'autre surface est calculee
     exactement.  L'erreur est donc celle de l'echantillonnage des points de
-    depart, pas de la mesure de distance.
+    depart, pas de la mesure de distance.  Avec `stop_above`, le calcul
+    s'arrete au premier point plus loin que ce seuil : la valeur rendue n'est
+    alors qu'une borne inferieure, qui suffit a conclure « au-dessus ».
     """
     grid_a = TriangleGrid(mesh_a)
     grid_b = TriangleGrid(mesh_b)
     worst = 0.0
-    for point in mesh_a.sample_surface(samples):
-        worst = max(worst, grid_b.distance(point))
-    for point in mesh_b.sample_surface(samples):
-        worst = max(worst, grid_a.distance(point))
-    return worst
+    for grid, mesh in ((grid_b, mesh_a), (grid_a, mesh_b)):
+        for point in mesh.sample_surface(samples):
+            worst = max(worst, grid.distance(point, cap))
+            # Qui ne veut savoir que « sous le seuil ou non » a sa reponse des
+            # le premier point qui le depasse.
+            if worst > stop_above:
+                return min(worst, cap)
+    return min(worst, cap)
