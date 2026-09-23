@@ -234,7 +234,11 @@ GENUS_PER_BLADE_MAX = 3.0  # - - genre maximal admis par pale pour qu'une lectur
 SLICE_THICKNESS_MAX = 0.05  # m - epaisseur au-dela de laquelle un solide fluide n'est plus une tranche mince mais un tube, qui ne dit plus ou est la section de reference
 SLICE_ANISOTROPY_MIN = 1.5  # - - rapport minimal entre le plus grand moment d'inertie (autour de la normale) et le suivant, pour qu'une tranche ait une normale isolee. Une tranche mince tend vers 2 sans l'atteindre (axes perpendiculaires : I_n = I_1 + I_2) ; 1.5 est un disque aussi epais que son rayon. Le seuil valait 2.0, qu'aucune tranche ne passait
 PLANES_DISTINCT_MIN = 0.001  # m - distance minimale entre les centroides des solides d'entree et de sortie : en deca, le sens debitant n'est pas defini
+BAND_INNER_MIN = 0.5  # - - rayon interieur minimal d'une bande cylindrique, rapporte a son rayon exterieur : en deca, le solide est un disque ou une couronne plate, pas une bande de refoulement radial
+BAND_LATERAL_NZ = 0.5  # - - composante axiale maximale de la normale d'une facette laterale de bande (faces de la paroi, par opposition aux faces de dessus et de dessous)
 RECENTRE_TOLERANCE = 0.01  # - - fraction du rayon exterieur en deca de laquelle un centroide colle a l'origine trahit une piece recentree a l'export (SPEC v2 6.1)
+COAXIAL_TOLERANCE = 0.02  # - - ecart admis entre les centres, dans le plan XY, des pieces de revolution (entree, sortie, moyeu), rapporte au rayon exterieur : au-dela, elles ne sont pas sur le meme axe
+CORNER_TOLERANCE = 0.0005  # m - deux pieces de tailles differentes dont les boites ont le meme coin a cette tolerance pres ont ete deplacees chacune de son cote (STLOUT d'AutoCAD exige l'octant positif)
 OVERLAP_TOLERANCE = 0.05  # - - recouvrement admis entre boites englobantes de composants, en fraction du plus petit volume (SPEC v2 6.2)
 BLADE_COPY_CLEARANCE = 0.0  # m - jeu minimal exige entre deux copies de pale voisines ; zero, seul le recoupement compte
 DECLARED_BLADES_MIN = 2  # nombre de pales declarable minimal (SPEC v2 2)

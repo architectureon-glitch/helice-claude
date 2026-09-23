@@ -331,3 +331,155 @@ class TestChaineComplete(ComposantsTestCase):
 
 if __name__ == "__main__":  # pragma: no cover - execution directe
     unittest.main()
+
+
+class TestPiecesDeplaceesUneParUne(ComposantsTestCase):
+    """STLOUT d'AutoCAD exige l'octant positif : pousser les pieces une par une detruit l'assemblage.
+
+    Cas reel : chaque fichier arrivait avec le coin de sa boite a l'origine,
+    l'entree a 86 mm de l'axe du corps. Aucune piece n'etant recentree *sur*
+    l'origine, l'ancien controle repondait « meme origine ».
+    """
+
+    def a_l_octant(self, mesh: TriMesh) -> TriMesh:
+        """Deplace la piece seule pour amener le coin de sa boite a l'origine."""
+        lo, _ = mesh.bounds()
+        return decale(mesh, (-lo[0], -lo[1], 0.0))
+
+    def roue(self):
+        return {
+            "entree": decale(synthetic.tube(0.0, 0.035, 0.001, z_center=+0.050)),
+            "sortie": decale(synthetic.tube(0.030, 0.100, 0.003, z_center=-0.060)),
+            "moyeu": decale(synthetic.tube(0.010, 0.030, 0.120, z_center=0.0)),
+            "pale": helicoide(),
+        }
+
+    def assembler(self, pieces: dict):
+        paths = {
+            components.SLOT_INLET: self.ecrire(pieces["entree"], "entree.stl"),
+            components.SLOT_OUTLET: self.ecrire(pieces["sortie"], "sortie.stl"),
+            components.SLOT_HUB: self.ecrire(pieces["moyeu"], "moyeu.stl"),
+            components.SLOT_BLADE: self.ecrire(pieces["pale"], "pale.stl"),
+        }
+        return components.assemble(paths, self.declarations())
+
+    def test_pieces_deplacees_une_par_une_bloquent(self):
+        pieces = {nom: self.a_l_octant(mesh) for nom, mesh in self.roue().items()}
+        blocked = self.assembler(pieces).blocked()
+        self.assertIsNotNone(blocked)
+        self.assertEqual(blocked.name, "repere commun")
+        self.assertIn("meme axe", blocked.detail)
+        self.assertIn("STLOUT", blocked.detail)
+
+    def test_pieces_deplacees_ensemble_passent(self):
+        pieces = self.roue()
+        lows = [mesh.bounds()[0] for mesh in pieces.values()]
+        vecteur = (-min(lo[0] for lo in lows), -min(lo[1] for lo in lows), 0.0)
+        ensemble = {nom: decale(mesh, vecteur) for nom, mesh in pieces.items()}
+        self.assertIsNone(self.assembler(ensemble).blocked())
+
+
+class TestRoueCentrifugeFermee(ComposantsTestCase):
+    """Refoulement radial et « corps » d'un seul tenant, comme sur la roue d'essai hel1.
+
+    La sortie est une bande cylindrique : lue comme une tranche plate, sa
+    hauteur passait pour son epaisseur (6 cm2 au lieu de 71). Et le moyeu,
+    exporte avec le flasque, donnait pour r1h le rayon du flasque.
+    """
+
+    def pieces(self, blade=None, corps=None):
+        entree = decale(synthetic.cylinder(0.035, 0.001, z_center=0.050))
+        sortie = decale(synthetic.tube(0.095, 0.096, 0.012, z_center=0.006))
+        if corps is None:
+            corps = decale(synthetic.combine([
+                synthetic.cylinder(0.015, 0.070, z_center=0.035),  # moyeu, traverse le plan d'entree
+                synthetic.tube(0.040, 0.096, 0.004, z_center=0.030),  # flasque
+            ]))
+        return {
+            components.SLOT_INLET: self.ecrire(entree, "entree.stl"),
+            components.SLOT_OUTLET: self.ecrire(sortie, "sortie.stl"),
+            components.SLOT_HUB: self.ecrire(corps, "corps.stl"),
+            components.SLOT_BLADE: self.ecrire(
+                blade or helicoide(r_hub=0.020, r_tip=0.090, offset=(ORIGINE_CAO[0], ORIGINE_CAO[1], 0.020)),
+                "pale.stl"),
+        }
+
+    def assembler(self, **kwargs):
+        return components.assemble(self.pieces(**kwargs),
+                                   self.declarations(mode="pompe_carenee"))
+
+    def test_bande_cylindrique_mesuree(self):
+        sortie = self.assembler().outlet
+        self.assertTrue(sortie.radial)
+        attendu = 2.0 * math.pi * 0.0955 * 0.012
+        self.assertLess(abs(sortie.area / attendu - 1.0), 0.03)
+        self.assertLess(abs(sortie.height - 0.012), 1e-4)
+
+    def test_topologie_centrifuge_lue_sur_la_sortie(self):
+        from impeller_analyzer.analysis import _topology_from_components
+        from impeller_analyzer.geometry import topology as topo
+
+        topologie = _topology_from_components(self.assembler())
+        self.assertEqual(topologie.machine_type, topo.CENTRIFUGAL)
+        self.assertLess(abs(topologie.b_2 - 0.012), 1e-4)
+        self.assertLess(abs(topologie.r_2 - 0.0955), 1e-3)
+
+    def test_moyeu_lu_au_plan_d_entree(self):
+        """Le corps porte un flasque de 96 mm : r1h reste le moyeu, 15 mm."""
+        from impeller_analyzer.analysis import _topology_from_components
+
+        topologie = _topology_from_components(self.assembler())
+        self.assertLess(abs(topologie.r_1h - 0.015), 0.001)
+
+    def test_centre_libre_au_plan_d_entree(self):
+        """Sans matiere sur l'axe au plan d'entree, rien n'obstrue le centre."""
+        from impeller_analyzer.analysis import _topology_from_components
+
+        corps = decale(synthetic.tube(0.040, 0.096, 0.004, z_center=0.030))
+        topologie = _topology_from_components(self.assembler(corps=corps))
+        self.assertLess(topologie.r_1h, 1e-6)
+
+
+def disque_sans_centre(rayon: float, epaisseur: float, z: float, n: int = 40) -> TriMesh:
+    """Disque plein dont les faces sont triangulees depuis le bord : aucun sommet au centre.
+
+    C'est ainsi qu'AutoCAD exporte un disque : lu sur ses sommets, son rayon
+    interieur valait son rayon exterieur.
+    """
+    vertices, faces = [], []
+    for level in (z - epaisseur / 2, z + epaisseur / 2):
+        for k in range(n):
+            a = 2.0 * math.pi * k / n
+            vertices.append((rayon * math.cos(a), rayon * math.sin(a), level))
+    for k in range(1, n - 1):
+        faces.append((0, k + 1, k))              # dessous
+        faces.append((n, n + k, n + k + 1))      # dessus
+    for k in range(n):
+        a, b = k, (k + 1) % n
+        faces += [(a, b, n + b), (a, n + b, n + a)]
+    return TriMesh(vertices, faces)
+
+
+class TestPiegesDeFacettisation(ComposantsTestCase):
+    """Ce que les sommets d'un maillage CAO ne disent pas de la piece."""
+
+    def test_disque_sans_sommet_central(self):
+        entree = components.load_component(
+            components.SLOT_INLET, self.ecrire(decale(disque_sans_centre(0.0356, 0.001, 0.05)), "d.stl"))
+        plan = components.fluid_plane(entree)
+        self.assertFalse(plan.radial)
+        attendu = 40 / 2 * math.sin(2 * math.pi / 40) * 0.0356 ** 2  # aire du polygone
+        self.assertLess(abs(plan.area / attendu - 1.0), 0.01)
+        axe = (entree.centroid[0], entree.centroid[1], 0.0)
+        self.assertLess(components.inner_radius(entree, axe), 1e-9)
+
+    def test_bande_facettisee(self):
+        """Paroi d'un millimetre sur 48 facettes : l'aire de passage a 1 % pres."""
+        bande = components.load_component(
+            components.SLOT_OUTLET,
+            self.ecrire(decale(synthetic.tube(0.0955, 0.0965, 0.0118, segments=48)), "b.stl"))
+        plan = components.fluid_plane(bande)
+        self.assertTrue(plan.radial)
+        attendu = 2.0 * math.pi * 0.096 * 0.0118
+        self.assertLess(abs(plan.area / attendu - 1.0), 0.01)
+        self.assertLess(abs(plan.thickness - 0.001), 5e-5)

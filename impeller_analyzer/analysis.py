@@ -913,8 +913,10 @@ def _topology_from_components(
     outlet = assembly.components[components_module.SLOT_OUTLET]
     blade = assembly.components[components_module.SLOT_BLADE]
 
-    topology.r_1h, topology.r_1s = inlet.radial_extent(axis)
-    topology.r_2h, topology.r_2s = outlet.radial_extent(axis)
+    topology.r_1s = inlet.radial_extent(axis)[1]
+    topology.r_2s = outlet.radial_extent(axis)[1]
+    topology.r_1h = components_module.inner_radius(inlet, axis)
+    topology.r_2h = components_module.inner_radius(outlet, axis)
     topology.r_1 = math.sqrt((topology.r_1s ** 2 + topology.r_1h ** 2) / 2.0)
     topology.r_2 = math.sqrt((topology.r_2s ** 2 + topology.r_2h ** 2) / 2.0)
     topology.r_aspiration = topology.r_1s
@@ -926,11 +928,39 @@ def _topology_from_components(
     topology.area_1 = assembly.inlet.area if assembly.inlet else 0.0
     topology.area_2 = assembly.outlet.area if assembly.outlet else 0.0
 
+    # Refoulement radial : la sortie est une bande cylindrique, dont le rayon
+    # est r2 et la hauteur b2. Lire b2 comme la largeur radiale d'une couronne
+    # rendait l'epaisseur de la paroi du solide, un millimetre.
+    if assembly.outlet is not None and assembly.outlet.radial:
+        topology.r_2 = assembly.outlet.radius
+        topology.r_2h = topology.r_2s = assembly.outlet.radius
+        topology.b_2 = assembly.outlet.height
+    else:
+        topology.b_2 = topology.r_2s - topology.r_2h
+
     hub = assembly.component(components_module.SLOT_HUB)
-    if hub is not None:
+    hub_radius = (
+        components_module.hub_radius_at(hub, assembly.inlet.centroid[2], axis)
+        if hub is not None and assembly.inlet is not None else None
+    )
+    if hub is not None and hub_radius is not None:
         topology.hub_kind = topology_module.HUB_SOLID
-        topology.r_1h = max(topology.r_1h, hub.radial_extent(axis)[1])
+        topology.r_1h = max(topology.r_1h, hub_radius)
         topology.confidence.set("rayon_de_moyeu", HIGH)
+        topology.notes.append(
+            f"rayon de moyeu lu sur le STL de moyeu, coupe au plan d'entree : "
+            f"{hub_radius * config.MM_PER_M:.1f} mm."
+        )
+    elif hub is not None:
+        topology.hub_kind = (
+            topology_module.HUB_BORE if topology.r_1h > 0.0 else topology_module.HUB_NONE
+        )
+        topology.confidence.set("rayon_de_moyeu", HIGH)
+        topology.notes.append(
+            "le STL de moyeu ne porte pas de matiere sur l'axe au plan d'entree : rien n'y "
+            "obstrue le centre, et r1h est le rayon interieur du solide d'entree "
+            f"({topology.r_1h * config.MM_PER_M:.1f} mm)."
+        )
     else:
         topology.hub_kind = (
             topology_module.HUB_BORE if topology.r_1h > 0.0 else topology_module.HUB_NONE
@@ -944,14 +974,18 @@ def _topology_from_components(
 
     topology.blades.n_blades = assembly.declarations.n_blades
     topology.blades.forced = True
-    topology.machine_type = (
-        topology_module.AXIAL if assembly.declarations.mode == MACHINE_PROPELLER
-        else topology_module.CENTRIFUGAL
-    )
+    # Le type de roue se lit sur la sortie **mesuree** : une bande cylindrique
+    # refoule radialement, une couronne plate axialement. Il etait deduit du
+    # seul mode declare, qui faisait de toute pompe carenee une centrifuge.
+    if assembly.declarations.mode == MACHINE_PROPELLER:
+        topology.machine_type = topology_module.AXIAL
+    elif assembly.outlet is not None and assembly.outlet.radial:
+        topology.machine_type = topology_module.CENTRIFUGAL
+    else:
+        topology.machine_type = topology_module.AXIAL
     topology.ratio_r2_r1s = (
         topology.r_blade_tip / topology.r_1s if topology.r_1s > 0.0 else 0.0
     )
-    topology.b_2 = topology.r_2s - topology.r_2h
     for quantity in ("rayons", "sections", "nombre_de_pales", "type_de_roue", "axe"):
         topology.confidence.set(quantity, HIGH)
     return topology

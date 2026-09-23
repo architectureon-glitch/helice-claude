@@ -591,6 +591,35 @@ de la pale entre les deux plans, nombre de pales trop grand pour l'étendue
 azimutale de la pale, topologie déclarée confrontée au **genre topologique**, et
 étanchéité.
 
+### Ce que la première roue réelle a appris au mode composants
+
+La roue d'essai hel1 — pompe fermée, cinq aubes en boucle, refoulement radial —
+est arrivée en cinq STL exportés d'AutoCAD. Quatre défauts sont apparus, tous
+corrigés et couverts par des tests :
+
+- **Pièces déplacées une à une.** `STLOUT` n'exporte que dans l'octant positif ;
+  chaque pièce avait été poussée de son côté, coin de boîte à l'origine, l'entrée
+  à 86 mm de l'axe du corps. Aucune n'étant recentrée *sur* l'origine, le contrôle
+  répondait « même origine ». Il vérifie maintenant que les pièces de révolution
+  (entrée, sortie, moyeu) sont sur le même axe, et qu'aucune paire de pièces de
+  tailles différentes ne partage le même coin de boîte. Le contrôle est bloquant, et
+  son message dit comment exporter : tout sélectionner, déplacer une seule fois,
+  exporter sans plus rien bouger.
+- **Refoulement radial.** La sortie d'une roue centrifuge est une bande
+  cylindrique, pas une tranche plate. Lue comme une tranche, sa hauteur passait
+  pour son épaisseur : 6 cm² au lieu de 71. La bande est reconnue (paroi radiale
+  plus mince que sa hauteur), son aire de passage est la moyenne de ses surfaces
+  latérales, et elle fixe r2, b2 et le type de roue — mesuré, et non plus déduit
+  du mode déclaré. Sur hel1, la paroi relue vaut 0,997 mm.
+- **Moyeu et flasque d'un seul tenant.** Le « corps » exporté portait le flasque :
+  son rayon extérieur, 96 mm, devenait r1h autour d'un œillard de 36. Le moyeu est
+  maintenant lu par une coupe au plan d'entrée.
+- **Disque sans sommet central.** AutoCAD triangule un disque depuis son bord :
+  lu sur ses sommets, son rayon intérieur valait son rayon extérieur, et l'aire
+  d'entrée dix millions de cm². Les rayons intérieurs se lisent désormais sur une
+  coupe, avec un test de parité dont la demi-droite évite la couture des solides
+  de révolution d'AutoCAD, placée à y = 0.
+
 ### Le genre topologique tranche ce que l'occupation ne peut pas
 
 Une aube en boucle est un tore : une anse par pale. Le fichier d'essai réel rend
@@ -1078,7 +1107,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-349 tests : une phase par module, le banc d'audit qui balaie des roues entières
+357 tests : une phase par module, le banc d'audit qui balaie des roues entières
 et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
 hélice libre, ce que l'outil a le droit d'affirmer, l'import par composants
 déclarés avec ses sept contrôles, les sorties visuelles — palette unique,

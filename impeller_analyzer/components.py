@@ -148,6 +148,9 @@ class FluidPlane:
     normal: Vec3 = (0.0, 0.0, 1.0)
     centroid: Vec3 = (0.0, 0.0, 0.0)
     anisotropy: float = 0.0  # rapport des valeurs propres, dit si la normale est isolee
+    radial: bool = False  # bande cylindrique : section traversee radialement (refoulement centrifuge)
+    radius: float = 0.0  # m, rayon moyen de la bande quand `radial`
+    height: float = 0.0  # m, hauteur axiale de la bande quand `radial`
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -156,9 +159,12 @@ class FluidPlane:
             "emplacement": self.slot,
             "epaisseur_m": self.thickness,
             "aire_m2": self.area,
-            "normale": list(self.normal),
+            "normale": "radiale" if self.radial else list(self.normal),
             "centroide_m": list(self.centroid),
-            "anisotropie": self.anisotropy,
+            "anisotropie": None if self.radial else self.anisotropy,
+            "bande_cylindrique": self.radial,
+            "rayon_de_bande_m": self.radius or None,
+            "hauteur_de_bande_m": self.height or None,
         }
 
 
@@ -274,6 +280,53 @@ def fluid_plane(component: Component) -> FluidPlane:
         )
         return plane
 
+    # Refoulement radial : sur une roue centrifuge, l'eau sort a travers une
+    # bande cylindrique, pas a travers un disque. Une tranche plate se lit par
+    # son epaisseur la plus faible ; une bande, par son epaisseur **radiale**,
+    # plus faible que sa hauteur. La lire comme une tranche prenait sa hauteur
+    # pour epaisseur : 6 cm2 au lieu de 71 sur la roue d'essai, et une normale
+    # axiale pour un ecoulement radial.
+    # Le rayon interieur se lit sur une coupe a mi-hauteur, pas sur les
+    # sommets : un disque plein dont les faces sont triangulees depuis le bord
+    # n'a aucun sommet au centre, et ses sommets le faisaient passer pour une
+    # bande d'epaisseur nulle -- une aire de dix millions de cm2.
+    centre = (component.centroid[0], component.centroid[1], 0.0)
+    height = component.high[2] - component.low[2]
+    cut = section(mesh, 0.5 * (component.low[2] + component.high[2]))
+    radii = [math.hypot(v[0] - centre[0], v[1] - centre[1]) for v in mesh.vertices]
+    r_out = max(radii) if radii else 0.0
+    ring = bool(cut) and not axis_inside(cut, centre)
+    # Rayons interieur et exterieur lus tous deux aux sommets de la coupe, pour
+    # qu'une facette ne compte pas d'un cote par son plat et de l'autre par son
+    # coin : sur une paroi d'un millimetre, l'ecart faisait 20 % d'aire.
+    r_in = min(math.hypot(x - centre[0], y - centre[1]) for seg in cut for x, y in seg) if ring else 0.0
+    wall = r_out - r_in
+    if ring and r_out > 0.0 and r_in > config.BAND_INNER_MIN * r_out and wall < height:
+        # Aire de passage : moyenne des surfaces laterales interieure et
+        # exterieure, lues sur les facettes dont la normale est radiale. Diviser
+        # le volume par une epaisseur de paroi lue sur les sommets heritait de la
+        # facettisation -- plat d'un cote, coin de l'autre --, soit 20 % d'erreur
+        # sur une paroi d'un millimetre.
+        lateral = sum(
+            area for area, index in zip(mesh.face_areas(), range(len(mesh.faces)))
+            if abs(mesh.face_normal(index)[2]) < config.BAND_LATERAL_NZ
+        )
+        plane.radial = True
+        plane.height = height
+        plane.area = 0.5 * lateral
+        plane.radius = plane.area / (2.0 * math.pi * height) if height > 0.0 else 0.0
+        plane.thickness = component.volume / plane.area if plane.area > 0.0 else 0.0
+        wall = plane.thickness
+        plane.normal = (0.0, 0.0, 0.0)  # radiale, differente en chaque point de la bande
+        if wall > config.SLICE_THICKNESS_MAX:
+            plane.warnings.append(
+                f"le solide « {component.slot} » est une bande de "
+                f"{wall * config.MM_PER_M:.0f} mm d'epaisseur radiale, au-dela des "
+                f"{config.SLICE_THICKNESS_MAX * config.MM_PER_M:.0f} mm attendus : l'aire publiee "
+                "est une moyenne sur cette epaisseur."
+            )
+        return plane
+
     values, vectors = jacobi_eigen(mesh.inertia_tensor(about=component.centroid))
     order = sorted(range(3), key=lambda i: values[i])
     smallest, middle, largest = (values[i] for i in order)
@@ -303,6 +356,90 @@ def fluid_plane(component: Component) -> FluidPlane:
             "comme une tranche plate placee dans le plan de reference."
         )
     return plane
+
+
+#: Direction de la demi-droite du test de parite. Quelconque a dessein : les
+#: solides de revolution d'AutoCAD ont leur couture dans le plan y = 0, et une
+#: demi-droite le long de +X la suivait exactement -- chaque traversee y etait
+#: comptee deux fois ou pas du tout, selon l'arrondi.
+_RAY = (math.cos(0.7303), math.sin(0.7303))
+
+
+def section(mesh, z: float) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """Segments de la coupe du maillage par le plan horizontal `z`."""
+    segments = []
+    for a, b, c in mesh.triangles():
+        cut = []
+        for p, q in ((a, b), (b, c), (c, a)):
+            dp, dq = p[2] - z, q[2] - z
+            if (dp > 0.0) != (dq > 0.0):
+                t = dp / (dp - dq)
+                cut.append((p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])))
+        if len(cut) == 2:
+            segments.append((cut[0], cut[1]))
+    return segments
+
+
+def axis_inside(segments, axis: Vec3) -> bool:
+    """Vrai si l'axe traverse la matiere dans cette coupe (parite des traversees)."""
+    dx, dy = _RAY
+    crossings = 0
+    for (x1, y1), (x2, y2) in segments:
+        ex, ey = x2 - x1, y2 - y1
+        det = ex * dy - ey * dx
+        if det == 0.0:
+            continue
+        wx, wy = axis[0] - x1, axis[1] - y1
+        s = (wx * dy - wy * dx) / det  # position sur le segment
+        t = (wx * ey - wy * ex) / det  # position sur la demi-droite
+        if 0.0 <= s < 1.0 and t > 0.0:
+            crossings += 1
+    return crossings % 2 == 1
+
+
+def distance_to_axis(segments, axis: Vec3) -> float:
+    """Plus courte distance de l'axe au contour de la coupe (pas a ses sommets)."""
+    best = math.inf
+    for (x1, y1), (x2, y2) in segments:
+        ex, ey = x2 - x1, y2 - y1
+        length = ex * ex + ey * ey
+        t = 0.0 if length == 0.0 else max(0.0, min(1.0, ((axis[0] - x1) * ex + (axis[1] - y1) * ey) / length))
+        best = min(best, math.hypot(x1 + t * ex - axis[0], y1 + t * ey - axis[1]))
+    return best
+
+
+def inner_radius(component: Component, axis: Vec3) -> float:
+    """Rayon interieur d'une piece autour de l'axe, lu sur une coupe a mi-hauteur.
+
+    Zero si l'axe traverse la matiere. Lu sur les sommets, il valait le rayon
+    exterieur d'un disque plein dont les faces sont triangulees depuis le bord,
+    et le disque d'entree passait pour une couronne percee jusqu'a son bord.
+    """
+    if component.mesh is None:
+        return 0.0
+    cut = section(component.mesh, 0.5 * (component.low[2] + component.high[2]))
+    if not cut or axis_inside(cut, axis):
+        return 0.0
+    return min(math.hypot(x - axis[0], y - axis[1]) for seg in cut for x, y in seg)
+
+
+def hub_radius_at(component: Component, z: float, axis: Vec3) -> float | None:
+    """Rayon de la matiere pleine qui entoure l'axe au plan `z`, ou `None`.
+
+    Le moyeu n'obstrue l'entree que la ou il est : au plan d'entree. Son rayon
+    **global** n'y dit rien -- un « corps » exporte d'un seul tenant, moyeu et
+    flasque ensemble, a pour rayon exterieur celui du flasque, et le prendre pour
+    r1h rendait un moyeu de 96 mm autour d'un oeillard de 36. On coupe donc la
+    piece par le plan : si l'axe y est dans la matiere, le rayon du moyeu est la
+    distance de l'axe au contour le plus proche ; sinon, rien n'obstrue le
+    centre a ce plan.
+    """
+    if component.mesh is None:
+        return None
+    segments = section(component.mesh, z)
+    if not segments or not axis_inside(segments, axis):
+        return None
+    return distance_to_axis(segments, axis)
 
 
 def _normalise(vector) -> Vec3:
@@ -416,8 +553,64 @@ def check_common_frame(assembly: ComponentAssembly) -> Check:
             "l'export : l'assemblage serait faux sans que rien n'y paraisse. Reexportez-la "
             "depuis le meme repere CAO, sans recentrage."
         )
+
+    # Pieces deplacees chacune de son cote. `STLOUT` d'AutoCAD n'exporte que
+    # des objets situes dans l'octant positif ; on les y pousse volontiers une
+    # par une, et chaque piece arrive avec le coin de sa boite a l'origine.
+    # Aucune n'est recentree sur l'origine -- le controle precedent passe --
+    # mais l'assemblage est detruit. Deux signatures le trahissent.
+    corner = config.CORNER_TOLERANCE
+    paires = []
+    for index, first in enumerate(pieces):
+        for second in pieces[index + 1:]:
+            same_corner = (
+                abs(first.low[0] - second.low[0]) < corner
+                and abs(first.low[1] - second.low[1]) < corner
+            )
+            sizes = [
+                abs((first.high[k] - first.low[k]) - (second.high[k] - second.low[k]))
+                for k in (0, 1)
+            ]
+            if same_corner and max(sizes) > 10.0 * corner:
+                paires.append(f"{first.slot} / {second.slot}")
+    # Les pieces de revolution -- solides fluide et moyeu -- sont centrees sur
+    # l'axe par construction : leurs centres doivent coincider dans le plan XY.
+    # La coque en est exclue, une volute n'etant pas de revolution.
+    revolution = [
+        c for c in pieces if c.slot in (SLOT_INLET, SLOT_OUTLET, SLOT_HUB)
+    ]
+    ecart, pire = 0.0, ""
+    for index, first in enumerate(revolution):
+        for second in revolution[index + 1:]:
+            d = math.hypot(
+                first.centroid[0] - second.centroid[0], first.centroid[1] - second.centroid[1]
+            )
+            if d > ecart:
+                ecart, pire = d, f"{first.slot} / {second.slot}"
+    decentre = ecart > config.COAXIAL_TOLERANCE * rayon
+    if paires or decentre:
+        causes = []
+        if decentre:
+            causes.append(
+                f"les pieces de revolution ne sont pas sur le meme axe ({pire} : centres a "
+                f"{ecart * config.MM_PER_M:.1f} mm l'un de l'autre dans le plan XY)"
+            )
+        if paires:
+            causes.append(
+                f"des pieces de tailles differentes ont exactement le meme coin de boite "
+                f"englobante ({'; '.join(paires)}), signature de pieces deplacees chacune de "
+                "son cote"
+            )
+        return Check(
+            "repere commun", False, True,
+            "; ".join(causes) + ". L'assemblage est detruit : la position de la pale par "
+            "rapport a l'axe, dont dependent angles, sens de rotation et sections, n'est plus "
+            "connue. Sous AutoCAD, STLOUT exige l'octant positif : selectionnez toutes les "
+            "pieces ensemble, deplacez-les en une seule fois du meme vecteur, puis exportez-les "
+            "une a une sans plus rien deplacer."
+        )
     return Check("repere commun", True, True,
-                 "toutes les pieces partagent la meme origine")
+                 "toutes les pieces partagent le meme repere et le meme axe")
 
 
 def check_no_interpenetration(assembly: ComponentAssembly) -> Check:
