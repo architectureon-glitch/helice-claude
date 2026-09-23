@@ -219,33 +219,54 @@ def pump(
             "la roue normale n'a pas de point de fonctionnement : "
             + _why_no_curve(normal_data, normal, omega, slip)
         )
+    # Les pertes de la SPEC sont calees sur le point nominal de chaque roue : la
+    # normale, dont le debit d'incidence nulle differe, en recevrait un autre
+    # frottement, et paraitrait meilleure ou pire pour une raison qui n'est pas
+    # physique. Les deux hauteurs sont donc calculees avec le frottement de la
+    # toroidale ; l'ecart de frottement du aux brins est lu, lui, sur les pertes
+    # de canal plus bas.
+    friction = curve.friction_coefficient
+    q_zero = curve.points[0].flow
+    incidence_n = _incidence(normal_data, omega, q_case)
+    has_normal = bool(normal.points)
+    h_th_t = meanline_module.euler_head(data, omega, q_case, slip)[0]
+    h_th_n = meanline_module.euler_head(normal_data, omega, q_case, slip)[0]
+    p_t = _at(curve, q_case, "shaft_power")
     result.rows = [
         ComparisonRow("Debit d'incidence nulle", "m3/h", curve.flow_nominal * m3h,
                       normal.flow_nominal * m3h,
                       "angle et section d'entree" if inlet is not None else "identique par construction"),
         ComparisonRow("Incidence au bord d'attaque, au debit du cas", "deg",
-                      _incidence(data, omega, q_case), _incidence(normal_data, omega, q_case),
+                      _incidence(data, omega, q_case), incidence_n,
                       "beta1 contre angle de l'eau arrivant sans giration"),
-        ComparisonRow("Hauteur d'Euler au debit du cas, avant pertes", "m",
-                      meanline_module.euler_head(data, omega, q_case, slip)[0],
-                      meanline_module.euler_head(normal_data, omega, q_case, slip)[0],
+        ComparisonRow("Hauteur d'Euler au debit du cas, avant pertes", "m", h_th_t, h_th_n,
                       "meme bord de fuite, meme glissement"),
-        ComparisonRow("Hauteur au debit du cas", "m", _at(curve, q_case, "head"),
-                      _at(normal, q_case, "head"),
-                      sans_courbe or ("entree differente" if inlet is not None
+        ComparisonRow("Hauteur au debit du cas", "m",
+                      _head(data, omega, slip, q_case, friction),
+                      _head(normal_data, omega, slip, q_case, friction) if has_normal else None,
+                      sans_courbe or ("meme frottement ; l'ecart vient de l'incidence"
+                                      if inlet is not None
                                       else "identique : meme Euler, memes pertes de la SPEC")),
-        ComparisonRow("Hauteur a debit nul", "m", curve.points[0].head,
-                      normal.points[0].head if normal.points else None,
+        ComparisonRow("Hauteur a debit nul", "m",
+                      _head(data, omega, slip, q_zero, friction),
+                      _head(normal_data, omega, slip, q_zero, friction) if has_normal else None,
                       sans_courbe or "u2 et beta2 identiques"),
-        ComparisonRow("Puissance a l'arbre au debit du cas", "kW",
-                      _scaled(_at(curve, q_case, "shaft_power"), kw),
-                      _scaled(_at(normal, q_case, "shaft_power"), kw),
-                      sans_courbe or "suit la hauteur"),
+        ComparisonRow("Puissance a l'arbre au debit du cas", "kW", _scaled(p_t, kw),
+                      _scaled(p_t * h_th_n / h_th_t, kw)
+                      if has_normal and p_t is not None and h_th_t > 0.0 else None,
+                      sans_courbe or "suit la hauteur d'Euler"),
         ComparisonRow("NPSH requis au debit du cas", "m", _at(curve, q_case, "npshr"),
                       _at(normal, q_case, "npshr"),
                       sans_courbe or ("entree differente" if inlet is not None
                                       else "identique : meme entree")),
     ]
+    if has_normal and incidence_n is not None and abs(incidence_n) > config.COMPARISON_INCIDENCE_WARN_DEG:
+        result.warnings.append(
+            f"la roue normale travaille au debit du cas avec {incidence_n:.0f} deg d'incidence a son "
+            "bord d'attaque. Le modele n'en compte que l'ecart de vitesse relative ; un tel angle "
+            "fait vraisemblablement decoller l'ecoulement au bord d'attaque, ce qui coute davantage : "
+            "sa hauteur au debit du cas est une borne haute."
+        )
 
     toroidal_losses = _channel(data, b_2, curve, strands)
     normal_losses = _channel(normal_data, b_2, normal, 1) if normal.points else None
@@ -330,6 +351,23 @@ def pump(
 
 def _scaled(value: float | None, factor: float) -> float | None:
     return None if value is None else value * factor
+
+
+def _head(
+    data: meanline_module.MeanlineInput, omega: float, slip: float, flow: float, friction: float,
+) -> float:
+    """Hauteur au debit `flow`, pertes de la SPEC avec un frottement impose.
+
+    Meme formule que `meanline._operating_point` : Euler avec glissement, moins
+    le frottement `friction . Q2`, moins l'incidence, comptee depuis le debit
+    d'incidence nulle de la roue elle-meme.
+    """
+    head_theoretical = meanline_module.euler_head(data, omega, flow, slip)[0]
+    u1 = omega * data.r_1
+    w1 = math.hypot(flow / data.area_1, u1)
+    w1_zero = math.hypot(u1 * math.tan(math.radians(data.beta1_deg)), u1)
+    return (head_theoretical - friction * flow ** 2
+            - config.XI_INCIDENCE * (w1 - w1_zero) ** 2 / (2.0 * config.G))
 
 
 def _incidence(data: meanline_module.MeanlineInput, omega: float, flow: float) -> float | None:

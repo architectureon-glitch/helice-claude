@@ -260,6 +260,7 @@ FREE_PASSAGE_AZIMUTHS = 24  # azimuts - sondage d'une bande de sortie sur son to
 FREE_PASSAGE_GRID = 32  # cases - sondage d'une tranche plate dans son plan (par cote)
 AXIAL_PUSH_SAMPLES = 40  # rayons - sondage du passage ou l'eau traverse un brin non refoulant le long de l'axe
 AXIAL_PUSH_AGREEMENT = 0.8  # - - part des rayons au-dela de laquelle le sens de poussee axiale d'un brin est dit net
+COMPARISON_INCIDENCE_WARN_DEG = 10.0  # degres - incidence de la roue normale au debit du cas au-dela de laquelle le comparatif dit que sa hauteur est une borne haute (le modele ne compte que l'ecart de |w1|)
 BLADE_COPY_CLEARANCE = 0.0  # m - jeu minimal exige entre deux copies de pale voisines ; zero, seul le recoupement compte
 DECLARED_BLADES_MIN = 2  # nombre de pales declarable minimal (SPEC v2 2)
 DECLARED_BLADES_MAX = 24  # nombre de pales declarable maximal (SPEC v2 2)
