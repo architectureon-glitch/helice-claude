@@ -203,18 +203,27 @@ def drag_coefficient(cl: float, thickness_ratio: float) -> float:
     return cd0 + config.CD_INDUCED_K * (cl - config.CD_MIN_DRAG_CL) ** 2
 
 
-def prandtl_loss(radius: float, r_hub: float, r_tip: float, phi: float, n_blades: int) -> float:
+def prandtl_loss(
+    radius: float, r_hub: float, r_tip: float, phi: float, n_blades: int,
+    closed_tip: bool = False,
+) -> float:
     """Facteur de perte de Prandtl, en bout de pale et en pied.
 
     Une pale n'est pas un disque : pres du bout, le fluide contourne l'extremite
     et la portance s'y annule.  Prandtl en donne le facteur correcteur ; le
     meme raisonnement vaut au pied, contre le moyeu.
+
+    `closed_tip` : la pale n'a pas de bout libre -- une boucle toroidale se
+    referme sur elle-meme --, et seul le pied est corrige. C'est la borne
+    favorable de la boucle : la jonction des deux brins au bout perturbe elle
+    aussi l'ecoulement, d'une facon que ce modele ne decrit pas.
     """
     sine = abs(math.sin(phi))
     if sine < config.PRANDTL_LOSS_MIN or radius <= 0.0:
         sine = config.PRANDTL_LOSS_MIN
     factor = 1.0
-    for distance in (r_tip - radius, radius - r_hub):
+    distances = (radius - r_hub,) if closed_tip else (r_tip - radius, radius - r_hub)
+    for distance in distances:
         exponent = 0.5 * n_blades * max(0.0, distance) / (radius * sine)
         factor *= (2.0 / math.pi) * math.acos(min(1.0, math.exp(-exponent)))
     return max(config.PRANDTL_LOSS_MIN, factor)
@@ -225,7 +234,7 @@ def prandtl_loss(radius: float, r_hub: float, r_tip: float, phi: float, n_blades
 # ---------------------------------------------------------------------------
 def _residual(
     phi: float, station: BladeStation, speed: float, omega: float,
-    r_hub: float, r_tip: float, n_blades: int,
+    r_hub: float, r_tip: float, n_blades: int, closed_tip: bool = False,
 ) -> tuple[float, float, float, float, float, bool]:
     """Residu du bilan a l'angle d'ecoulement `phi`, et l'etat qui va avec.
 
@@ -248,7 +257,7 @@ def _residual(
     alpha = theta - phi
     cl, stalled = lift_coefficient(alpha, station.camber_ratio)
     cd = drag_coefficient(cl, station.thickness_ratio)
-    loss = prandtl_loss(station.radius, r_hub, r_tip, phi, n_blades)
+    loss = prandtl_loss(station.radius, r_hub, r_tip, phi, n_blades, closed_tip)
     normal = cl * math.cos(phi) - cd * math.sin(phi)
     tangential = cl * math.sin(phi) + cd * math.cos(phi)
 
@@ -274,6 +283,7 @@ def solve_station(
     r_tip: float,
     n_blades: int,
     rho: float,
+    closed_tip: bool = False,
 ) -> BladeStation:
     """Egalise quantite de mouvement et element de pale a une station radiale.
 
@@ -285,15 +295,15 @@ def solve_station(
     pompe axiale.
     """
     low, high = config.BEM_PHI_MIN, config.BEM_PHI_MAX
-    r_low = _residual(low, station, speed, omega, r_hub, r_tip, n_blades)[0]
-    r_high = _residual(high, station, speed, omega, r_hub, r_tip, n_blades)[0]
+    r_low = _residual(low, station, speed, omega, r_hub, r_tip, n_blades, closed_tip)[0]
+    r_high = _residual(high, station, speed, omega, r_hub, r_tip, n_blades, closed_tip)[0]
 
     station.converged = False
     phi = high
     if math.isfinite(r_low) and math.isfinite(r_high) and r_low * r_high <= 0.0:
         for _ in range(config.BEM_MAX_ITERATIONS):
             phi = 0.5 * (low + high)
-            middle = _residual(phi, station, speed, omega, r_hub, r_tip, n_blades)[0]
+            middle = _residual(phi, station, speed, omega, r_hub, r_tip, n_blades, closed_tip)[0]
             if not math.isfinite(middle):
                 break
             if r_low * middle <= 0.0:
@@ -305,7 +315,7 @@ def solve_station(
                 break
 
     _, cl, cd, loss, k_swirl, stalled = _residual(
-        phi, station, speed, omega, r_hub, r_tip, n_blades
+        phi, station, speed, omega, r_hub, r_tip, n_blades, closed_tip
     )
     station.phi_deg = math.degrees(phi)
     station.alpha_deg = math.degrees(math.radians(station.theta_deg) - phi)
@@ -424,6 +434,7 @@ def operating_point(
     hub_diameter: float,
     n_blades: int,
     speed_of_sound: float = 0.0,
+    closed_tip: bool = False,
 ) -> PropulsionPoint:
     """Poussee, couple et rendement de l'helice a une vitesse d'avance donnee."""
     point = PropulsionPoint(speed=speed)
@@ -437,7 +448,7 @@ def operating_point(
     thrust = torque = 0.0
     stalled = 0
     for station in stations:
-        solved = solve_station(station, speed, omega, r_hub, r_tip, n_blades, rho)
+        solved = solve_station(station, speed, omega, r_hub, r_tip, n_blades, rho, closed_tip)
         thrust += solved.thrust_gradient * width
         torque += solved.torque_gradient * width
         stalled += 1 if solved.stalled else 0

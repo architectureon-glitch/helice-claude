@@ -892,6 +892,13 @@ th{font-weight:500; color:var(--ink-soft); font-size:.78rem}
                 <input id="beta2" placeholder="detecte" inputmode="decimal">
               </div>
               <div class="champ">
+                <label for="forme">Forme des aubes</label>
+                <select id="forme">
+                  <option value="">lue sur la piece</option>
+                  <option value="toroidale">declaree toroidale</option>
+                </select>
+              </div>
+              <div class="champ">
                 <label for="rotation">Sens de rotation</label>
                 <select id="rotation">
                   <option value="">a indiquer</option>
@@ -1824,6 +1831,8 @@ if (SERVEUR) {
     params.set("rpm", document.getElementById("rpm").value.trim());
     const sens = document.getElementById("rotation").value;
     if (sens) params.set("rotation", sens);
+    const forme = document.getElementById("forme").value;
+    if (forme) params.set("forme", forme);
     for (const [id, cle] of [["r-asp","r_aspiration"], ["pales","pales"], ["beta1","beta1"],
                              ["beta2","beta2"], ["temperature","temperature"], ["altitude","altitude"],
                              ["hauteur","hauteur"], ["pertes","pertes"], ["grille","grille"]]) {

@@ -98,8 +98,11 @@ def build_parser() -> argparse.ArgumentParser:
     composants.add_argument(
         "--topologie-pale",
         choices=list(components.BLADE_TOPOLOGIES),
-        default=components.BLADE_CONVENTIONAL,
-        help="topologie de pale declaree ; choisit la logique de coupe (defaut : %(default)s)",
+        default=None,
+        help="topologie de pale declaree. L'outil n'etudie que les helices toroidales : une "
+             "piece conventionnelle est refusee. En import global, declarer « toroidale » "
+             "poursuit l'analyse quand la lecture ne voit pas de boucle ; en mode composants, "
+             "c'est la valeur retenue par defaut",
     )
 
     parser.add_argument(
@@ -208,7 +211,9 @@ def options_from_args(args: argparse.Namespace) -> Options:
             components.SLOT_OUTLET: args.sortie_fluide,
             components.SLOT_BLADE: args.pale,
         },
-        blade_topology=args.topologie_pale,
+        blade_topology=args.topologie_pale or components.BLADE_TOROIDAL,
+        topology_declared=args.topologie_pale is not None,
+        toroidal_only=True,
         wheel_type=args.type_de_roue,
         propulsion_speed=args.vitesse_avance,
         fluid=args.fluide,
@@ -272,6 +277,33 @@ def summarise(result, produced: dict[str, str]) -> str:
         )
     elif result.speed_limit is not None:
         lines.append("Vitesse maximale sans cavitation : non calculable (pas de point de fonctionnement)")
+    comparison = result.comparison
+    if comparison is not None:
+        lines.append(
+            "Si l'helice etait normale (meme geometrie, "
+            + ("pales a bout libre ; toroidale : bout conserve a boucle fermee) :"
+               if comparison.machine == "helice_libre" else "aubes a un seul brin) :")
+        )
+        shown = 0
+        for row in comparison.rows:
+            if row.toroidal is None or row.normal is None or shown >= 3:
+                continue
+            alt = (f" a {row.toroidal_alt:.2f}" if row.toroidal_alt is not None else "")
+            lines.append(
+                f"  {row.quantity} : {row.toroidal:.2f}{alt} {row.unit} (toroidale) contre "
+                f"{row.normal:.2f} (normale)"
+            )
+            shown += 1
+        for warning in comparison.warnings[:1]:
+            lines.append(f"  {warning}")
+        variant = next((r for r in comparison.variant_rows
+                        if r.toroidal is not None and r.normal is not None), None)
+        if variant is not None:
+            lines.append(
+                f"  {comparison.variant_title.split(' : ')[0].capitalize()} : "
+                f"{variant.quantity.lower()} {variant.normal:.2f} {variant.unit} au lieu de "
+                f"{variant.toroidal:.2f}"
+            )
     lines.append(f"Confiance globale : {result.overall_confidence()}")
     if result.warnings:
         lines.append(f"{len(result.warnings)} avertissement(s), voir le rapport")

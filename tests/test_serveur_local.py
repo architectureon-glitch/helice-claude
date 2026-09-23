@@ -55,6 +55,18 @@ class TestFormFields(BaseTestCase):
             serve.options_from_query({"altitude": ["haut"]})
         self.assertIn("altitude", str(ctx.exception))
 
+    def test_forme_des_aubes(self):
+        """La page n'etudie que les toroidales ; la forme se declare comme --topologie-pale."""
+        lue = serve.options_from_query({})
+        self.assertTrue(lue.toroidal_only)
+        self.assertFalse(lue.topology_declared)
+        declaree = serve.options_from_query({"forme": ["toroidale"]})
+        self.assertTrue(declaree.topology_declared)
+        self.assertEqual(declaree.blade_topology, "toroidale")
+        with self.assertRaises(serve.BadRequest) as ctx:
+            serve.options_from_query({"forme": ["conventionnelle"]})
+        self.assertIn("toroidales", str(ctx.exception))
+
     def test_extensions(self):
         """Les formats connus passent, le .lisp est refuse avec sa consigne."""
         for name in ("roue.stl", "ROUE.STL", "a/b/roue.obj", "roue.dxf", "roue.step"):

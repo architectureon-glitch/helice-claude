@@ -30,6 +30,7 @@ import uuid
 import webbrowser
 
 from . import config
+from . import components
 from .analysis import Options, run
 from .geometry import blade_angles
 from .io import loader, report, viewer
@@ -150,6 +151,19 @@ def _rotation(query: dict) -> int | None:
         raise BadRequest(str(error)) from error
 
 
+def _forme(query: dict) -> dict:
+    """Forme des aubes declaree par le formulaire : vide, la lecture tranche."""
+    value = (query.get("forme", [""])[0] or "").strip()
+    if not value:
+        return {}
+    if value != components.BLADE_TOROIDAL:
+        raise BadRequest(
+            f"forme des aubes inconnue : {value!r}. L'outil n'etudie que les helices toroidales ; "
+            "laissez le champ vide pour que la lecture tranche."
+        )
+    return {"blade_topology": components.BLADE_TOROIDAL, "topology_declared": True}
+
+
 def options_from_query(query: dict) -> Options:
     """Construit les options d'analyse depuis les champs du formulaire."""
     grid = _int(query, "grille", config.GRID_NR) or config.GRID_NR
@@ -168,6 +182,8 @@ def options_from_query(query: dict) -> Options:
         suction_losses=_float(query, "pertes", config.PERTES_ASPIRATION),
         grid_nr=grid,
         grid_nz=grid,
+        toroidal_only=True,
+        **_forme(query),
     )
 
 

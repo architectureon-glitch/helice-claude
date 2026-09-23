@@ -149,6 +149,74 @@ def _markdown_table(header: list[str], rows: list[list[str]]) -> list[str]:
     return lines
 
 
+def _value(value: float | None) -> str:
+    return "-" if value is None else f"{value:.2f}"
+
+
+def _gap(row) -> str:
+    """Ecart relatif de la toroidale sur la normale, deux estimations s'il y en a deux."""
+    def one(value):
+        if value is None or row.normal is None:
+            return "-"
+        if row.absolute:
+            return f"{value - row.normal:+.1f} {'pt' if row.unit == '%' else row.unit}"
+        if row.normal == 0.0:
+            return "-"
+        return f"{(value - row.normal) / abs(row.normal):+.0%}"
+    if row.toroidal_alt is not None:
+        return f"{one(row.toroidal)} a {one(row.toroidal_alt)}"
+    return one(row.toroidal)
+
+
+def comparison_lines(comparison) -> list[str]:
+    """Section « Si l'helice etait normale » : le comparatif publie avec chaque resultat."""
+    if comparison is None:
+        return []
+    lines = ["## Si l'helice etait normale", ""]
+    lines.append(
+        f"Cas calcule : {comparison.case}. Helice de reference : {comparison.equivalent}. "
+        "Seule la forme des aubes change ; l'ecart est ce que la boucle apporte ou coute, dans la "
+        f"mesure ou le modele le voit. Confiance du comparatif : {_confidence(comparison.confidence)}."
+    )
+    lines.append("")
+    three = any(row.toroidal_alt is not None for row in comparison.rows)
+
+    def table(rows, columns):
+        header = ["Grandeur", "Unite", *columns, "Ecart toroidale / reference", "Ce qui fait l'ecart"]
+        body = []
+        for row in rows:
+            values = [_value(row.toroidal)]
+            if three:
+                values.append(_value(row.toroidal_alt))
+            values.append(_value(row.normal))
+            body.append([row.quantity, row.unit, *values, _gap(row), row.cause])
+        return _markdown_table(header, body)
+
+    lines.extend(table(comparison.rows, comparison.columns))
+    lines.append("")
+    if comparison.variant_rows:
+        lines.append(f"Variante -- {comparison.variant_title} :")
+        lines.append("")
+        three, saved = False, three
+        lines.extend(table(comparison.variant_rows, comparison.columns_variant))
+        three = saved
+        lines.append("")
+    if comparison.modelled:
+        lines.append("**Ce que le modele compte**")
+        lines.append("")
+        lines.extend(f"- {item}" for item in comparison.modelled)
+        lines.append("")
+    if comparison.not_modelled:
+        lines.append("**Ce qu'il ne compte pas**")
+        lines.append("")
+        lines.extend(f"- {item}" for item in comparison.not_modelled)
+        lines.append("")
+    for warning in comparison.warnings:
+        lines.append(f"> {warning}")
+        lines.append("")
+    return lines
+
+
 def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> str:
     """Ecrit `rapport.md` : rapport lisible avec les deux tableaux et les encadres."""
     lines: list[str] = []
@@ -326,6 +394,8 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
             f"(seuil {config.SIMILARITY_TOL * 100.0:.0f} %) - {verdict}."
         )
         lines.append("")
+
+    lines.extend(comparison_lines(result.comparison))
 
     assembly = result.assembly
     if assembly is not None:

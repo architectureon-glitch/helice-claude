@@ -1,9 +1,14 @@
 # impeller-analyzer
 
-Analyse hydraulique d'une hélice ou d'une roue de pompe à eau à partir d'un
-fichier 3D : géométrie extraite, sens de rotation requis, sens de sortie du
-liquide, performances à plusieurs régimes, NPSH requis et vitesse maximale
-avant cavitation.
+Étude des hélices et roues de pompe **toroïdales** — aubes en boucle fermée — à
+partir d'un fichier 3D : géométrie des boucles, sens de rotation, performances
+(pompe : courbes hauteur-débit, NPSH requis, vitesse maximale avant cavitation ;
+hélice libre : poussée et rendement propulsif), et pour chaque résultat le
+**comparatif de la même géométrie à aubes normales**, avec ce que le modèle
+compte de l'écart et ce qu'il n'en compte pas.
+
+Une pièce qui n'est pas toroïdale est refusée, avec la raison. Le calcul d'une
+hélice normale reste dans le moteur : il sert de référence au comparatif.
 
 Le cahier des charges complet est dans [`SPEC.md`](SPEC.md) ; son extension,
 l'import par composants déclarés, dans [`SPEC_V2.md`](SPEC_V2.md).
@@ -15,7 +20,8 @@ standard de **Python 3.11**.
 
 ```bash
 git clone https://github.com/architectureon-glitch/helice-claude && cd helice-claude
-python3 -m impeller_analyzer examples/roue_centrifuge.stl --out rapport/
+python3 -m impeller_analyzer examples/helice_toroidale.stl --machine helice_libre \
+    --vitesse-avance 2 --rpm 1000 --out rapport/
 ```
 
 Sous Windows, la commande s'appelle `py` (ou `python`) plutôt que `python3`, et
@@ -38,7 +44,9 @@ python3 -m impeller_analyzer.serve
 
 Le navigateur s'ouvre sur l'application : **déposez votre fichier 3D dans la
 page**, réglez l'unité et les régimes, lancez l'analyse. La roue apparaît en 3D
-et le rapport complet se télécharge depuis le panneau de droite.
+et le rapport complet se télécharge depuis le panneau de droite. Le champ
+**Forme des aubes** laisse la lecture trancher ; « déclarée toroïdale » poursuit
+l'analyse quand la lecture ne voit pas de boucle, comme `--topologie-pale`.
 
 Le calcul est en Python : il ne peut pas s'exécuter dans le navigateur. Plutôt
 que d'entretenir une seconde implémentation de la physique en JavaScript — deux
@@ -111,6 +119,57 @@ fichier, et se remplit sans rechargement à chaque analyse.
 pèse à peu près la taille du maillage : environ 1 Mo pour 17 000 triangles ;
 au-delà de 120 000 triangles le maillage est décimé pour l'affichage seul, le
 calcul restant fait sur le maillage complet).
+
+## Si l'hélice était normale : le comparatif
+
+Chaque résultat vient avec son jumeau : la **même géométrie** — mêmes rayons,
+mêmes sections, mêmes angles, même nombre de pales, même régime — dont chaque
+aube serait un seul brin au lieu d'une boucle. Seule la forme de l'aube change ;
+l'écart entre les deux colonnes est ce que la boucle apporte ou coûte, **dans la
+mesure où le modèle le voit**, et le rapport dit à chaque fois ce qu'il compte et
+ce qu'il ne compte pas.
+
+**Pompe.** Une ligne moyenne ne connaît pas la forme de l'aube : à géométrie
+égale, elle rend la même courbe, et le rapport le dit plutôt que d'afficher un
+écart fabriqué. L'écart se lit sur les **pertes de canal** : une aube en boucle
+présente ses deux brins au frottement, pour le même canal — surface mouillée,
+perte de frottement, rendement de comparaison. Sur une roue **fermée**, le
+flasque supprime déjà le tourbillon et la fuite en bout de pale, pour les deux
+roues : la boucle n'y apporte rien, et le rapport le dit. Sur une roue
+**ouverte**, la normale fuit par-dessus ses aubes, la boucle non ; l'écart,
+favorable à la toroïdale, dépend du jeu au carter et n'est pas chiffré.
+
+Sur une roue **en série** comme hel1, la jumelle normale n'a pas le brin amont :
+elle aspire par le bord d'attaque de son aube. Le comparatif chiffre alors
+l'incidence de chacune au débit du cas, leurs hauteurs d'Euler, et dit quand la
+normale n'a pas de point de fonctionnement. Sur hel1 : son bord d'attaque, à 47°,
+est adapté à 101 m³/h, débit auquel son bord de fuite, à 23°, ne donne plus de
+hauteur. C'est le brin haut qui rend cette roue cohérente à 32 m³/h.
+
+Quand le bord de fuite s'arrête avant la fente de sortie, une **variante à
+diamètre égal** prolonge l'aube jusqu'à la fente, entrée inchangée. Sur hel1, à
+1450 tr/min et 32 m³/h : 10,6 m au lieu de 8,6, et 17,3 m au lieu de 13,5 à débit
+nul.
+
+**Hélice libre.** Le bilan par élément de pale voit ce qui fait l'intérêt de la
+boucle : une pale normale perd de la portance près de son bout libre, où le
+fluide la contourne (facteur de Prandtl) ; une boucle n'a pas de bout libre. La
+toroïdale est donnée en **deux estimations** — perte de bout conservée, comme si
+chaque brin avait un bout libre, et supprimée — et la réalité est entre les
+deux : la jonction des brins au bout de la boucle perturbe elle aussi
+l'écoulement, d'une façon que le modèle ne décrit pas. Seul un essai la situe.
+Quand la lecture sépare les deux brins de chaque boucle, la toroïdale compte deux
+fois plus de surfaces portantes que la normale ; quand elle ne les sépare pas, le
+rapport le dit, et l'écart ne porte que sur le bout de pale. Le bruit et le
+tourbillon de bout, argument premier des hélices toroïdales, sont hors du modèle.
+
+**Le refus.** Une pièce que la lecture dit conventionnelle est refusée. La
+lecture peut se tromper : `--topologie-pale toroidale` poursuit alors l'analyse,
+en le signalant en tête du rapport. Un maillage troué laisse le verdict
+suspendu, et la pièce est refusée sauf déclaration. En mode composants, la pale
+est toroïdale par défaut ; une pale étanche d'un seul tenant, de genre 0, n'a pas
+d'anse et ne peut pas être une boucle : elle est refusée. Le drapeau est levé par
+la ligne de commande et la page ; l'appel direct au moteur le laisse baissé.
 
 ## Comment ça marche
 
@@ -1242,7 +1301,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-385 tests : une phase par module, le banc d'audit qui balaie des roues entières
+399 tests : une phase par module, le banc d'audit qui balaie des roues entières
 et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
 hélice libre, ce que l'outil a le droit d'affirmer, l'import par composants
 déclarés avec ses sept contrôles, les sorties visuelles — palette unique,

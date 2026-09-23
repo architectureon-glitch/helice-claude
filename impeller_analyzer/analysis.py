@@ -24,6 +24,7 @@ from .geometry import occupancy as occupancy_module
 from .geometry import sections as sections_module
 from .geometry import topology as topology_module
 from .hydraulics import cavitation as cavitation_module
+from .hydraulics import comparison as comparison_module
 from .hydraulics import energy as energy_module
 from .hydraulics import losses as losses_module
 from .hydraulics import meanline as meanline_module
@@ -61,6 +62,12 @@ class Options:
     rotation: int | None = None  # +1 anti-horaire, -1 horaire, None : a indiquer
     component_paths: dict = field(default_factory=dict)  # emplacements du mode composants
     blade_topology: str = components_module.BLADE_CONVENTIONAL  # topologie de pale declaree
+    topology_declared: bool = False  # la topologie de pale a-t-elle ete declaree par l'utilisateur
+    # L'outil n'etudie que les helices toroidales : il refuse une piece qui n'en est
+    # pas une. Le moteur, lui, reste general -- le calcul d'une helice normale sert
+    # de reference au comparatif --, d'ou un drapeau que la ligne de commande et la
+    # page levent, et que l'appel direct laisse baisse.
+    toroidal_only: bool = False
     machine: str = MACHINE_AUTO  # modele hydraulique : auto, pompe carenee, ou helice libre
     wheel_type: str = WHEEL_AUTO  # famille de roue declaree ; prime sur la classification
     propulsion_speed: float | None = None  # m/s - vitesse d'avance en helice libre ; None : pas d'analyse propulsive
@@ -223,6 +230,7 @@ class AnalysisResult:
     isolated_angles: isolated_module.IsolatedBladeAngles | None = None  # mode composants
     propulsion: propulsion_module.PropulsionResult | None = None
     sensitivity: sensitivity_module.SensitivityReport | None = None
+    comparison: comparison_module.Comparison | None = None  # si l'helice etait normale
     meanline_input: meanline_module.MeanlineInput | None = None
     curves: list[meanline_module.PerformanceCurve] = field(default_factory=list)
     head_sensitivity: float = 0.0  # ecart relatif de hauteur pour +/- 1 deg sur beta2
@@ -268,6 +276,7 @@ class AnalysisResult:
             "mode_d_import": "composants" if self.assembly else "vrac",
             "propulsion": self.propulsion.to_dict() if self.propulsion else None,
             "sensibilite": self.sensitivity.to_dict() if self.sensitivity else None,
+            "si_l_helice_etait_normale": self.comparison.to_dict() if self.comparison else None,
             "pales": self.blades.to_dict() if self.blades else None,
             "sens_de_sortie_du_liquide": self.discharge,
             "installation": self.installation.to_dict() if self.installation else None,
@@ -487,6 +496,19 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     result.blade_loops = loops
     result.warnings.extend(loops.warnings)
 
+    if options.toroidal_only:
+        refus, reserve = _toroidal_gate_bulk(loops, topology.blades.n_blades, options)
+        if refus:
+            result.rejection = refus
+            result.warnings.insert(0, f"analyse interrompue : {refus}")
+            result.confidence.cap_all(LOW)
+            _fill_provenance(result, options)
+            result.elapsed_s = time.time() - started
+            return result
+        if reserve:
+            result.warnings.insert(0, reserve)
+            result.confidence.set("topologie_de_pale", LOW)
+
     # Les criteres de classification -- rapport r2/r1s, solidite, largeur de
     # sortie -- supposent tous un canal meridien conventionnel, borde par le
     # moyeu et le carter, que le fluide traverse une fois. Une aube en boucle
@@ -668,7 +690,16 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     if topology.rotation_ambiguity and not geometry.forced_rotation:
         result.warnings.insert(0, topology.rotation_ambiguity)
 
-    _curve_analysis(result, topology, geometry, strands=2 if loops.looped else 1)
+    toroidal = loops.looped or (
+        options.topology_declared and options.blade_topology == components_module.BLADE_TOROIDAL
+    )
+    _curve_analysis(result, topology, geometry, strands=2 if toroidal else 1)
+    if toroidal and result.curves and options.machine != MACHINE_PROPELLER:
+        result.comparison = comparison_module.pump(
+            result.meanline_input, result.curves[0], topology.b_2, strands=2,
+            closed=topology.closed_impeller,
+            confidence=result.confidence.get_level("hauteur"),
+        )
 
     # Phase propulsive, sur demande. Elle ne remplace pas l'analyse de pompe :
     # elle repond a une autre question -- la meme piece tournant en helice libre,
@@ -693,6 +724,11 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
         )
         result.warnings.extend(result.propulsion.warnings)
         result.confidence.set("propulsion", result.propulsion.confidence)
+        if toroidal and declared:
+            result.comparison = comparison_module.propeller(
+                result.propulsion, topology, geometry,
+                confidence=result.propulsion.confidence,
+            )
     elif refused and options.propulsion_speed is not None:
         result.warnings.append(
             "une vitesse d'avance est demandee, mais la machine est declaree pompe carenee : "
@@ -879,8 +915,11 @@ def run_components(options: Options) -> AnalysisResult:
     result.confidence.update(assembly.confidence)
 
     blocked = assembly.blocked()
-    if blocked is not None:
-        result.warnings.insert(0, f"analyse interrompue : {blocked.detail}")
+    refus = _toroidal_gate_components(assembly) if options.toroidal_only else None
+    if blocked is not None or refus:
+        motif = blocked.detail if blocked is not None else refus
+        result.rejection = refus
+        result.warnings.insert(0, f"analyse interrompue : {motif}")
         result.confidence.cap_all(LOW)
         result.elapsed_s = time.time() - started
         return result
@@ -925,6 +964,84 @@ def run_components(options: Options) -> AnalysisResult:
         result.provenance.set(quantity, MESURE)
     result.elapsed_s = time.time() - started
     return result
+
+
+#: Ce que l'outil etudie, dit une fois pour toutes les raisons de refus.
+TOROIDAL_SCOPE = (
+    "L'outil n'etudie que les helices toroidales ; le calcul d'une helice normale n'est "
+    "plus publie seul, il sert de reference au comparatif d'une helice toroidale."
+)
+
+
+def _toroidal_gate_bulk(
+    loops: loops_module.LoopResult, n_blades: int, options: Options
+) -> tuple[str | None, str | None]:
+    """Import global : `(refus, reserve)`. La piece est-elle toroidale ?
+
+    La lecture tranche ; une declaration ne la contredit que pour la completer.
+    Une piece que la lecture dit conventionnelle, et que rien ne declare
+    toroidale, est refusee. Si l'utilisateur la declare toroidale, l'analyse se
+    poursuit en le disant : un detecteur peut se tromper, et la piece est sous
+    ses yeux.
+    """
+    declared = options.topology_declared
+    if declared and options.blade_topology == components_module.BLADE_CONVENTIONAL:
+        return (
+            "la piece est declaree conventionnelle (--topologie-pale conventionnelle). "
+            + TOROIDAL_SCOPE, None,
+        )
+    toroidal_declared = declared and options.blade_topology == components_module.BLADE_TOROIDAL
+    if loops.looped:
+        return None, None
+    if loops.undecided:
+        if toroidal_declared:
+            return None, (
+                "forme des aubes non etablie par la lecture -- le maillage n'est pas etanche, et "
+                "un maillage troue produit la meme signature qu'une boucle. La piece est traitee "
+                "comme toroidale sur votre declaration."
+            )
+        return (
+            "la forme des aubes n'a pas pu etre etablie : le maillage n'est pas etanche, et un "
+            "maillage troue produit la meme signature qu'une boucle. " + TOROIDAL_SCOPE
+            + " Reparez le maillage, ou declarez --topologie-pale toroidale si la piece en est une.",
+            None,
+        )
+    if toroidal_declared:
+        return None, (
+            "la lecture ne voit aucune aube en boucle : une coupe a azimut fixe ne traverse "
+            "chaque aube qu'une fois. L'analyse se poursuit parce que la piece est declaree "
+            "toroidale ; verifiez-le, car tout ce qui suit en depend."
+        )
+    return (
+        f"la piece n'est pas toroidale : aucune de ses {n_blades} aubes ne se referme sur "
+        "elle-meme -- une coupe a azimut fixe ne traverse chaque aube qu'une fois. "
+        + TOROIDAL_SCOPE
+        + " Si la piece est toroidale et que la lecture se trompe, declarez-la par "
+        "--topologie-pale toroidale : l'analyse continuera, en le signalant.",
+        None,
+    )
+
+
+def _toroidal_gate_components(assembly: components_module.ComponentAssembly) -> str | None:
+    """Mode composants : refus si la pale est declaree, ou mesuree sans ambiguite, conventionnelle.
+
+    Le genre d'un maillage etanche d'un seul tenant ne se discute pas : de genre
+    zero, la pale n'a pas d'anse, et ne peut pas etre une boucle fermee. Sur un
+    maillage troue ou en plusieurs morceaux, le genre ne tranche pas, et la
+    declaration est retenue avec la reserve du controle de topologie.
+    """
+    if assembly.declarations.blade_topology == components_module.BLADE_CONVENTIONAL:
+        return "la pale est declaree conventionnelle. " + TOROIDAL_SCOPE
+    blade = assembly.component(components_module.SLOT_BLADE)
+    if blade is None or blade.mesh is None or not blade.watertight:
+        return None
+    g, _, _ = components_module.genus(blade.mesh)
+    if g < 1 and components_module._connected_parts(blade.mesh) == 1:
+        return (
+            "la pale declaree toroidale n'est pas une boucle : son maillage, etanche et d'un "
+            "seul tenant, est de genre 0 -- sans anse. " + TOROIDAL_SCOPE
+        )
+    return None
 
 
 def _topology_from_components(
@@ -1201,8 +1318,13 @@ def _components_hydraulics(result: AnalysisResult, options: Options) -> None:
     # composants ; le modele la lit sur la geometrie des aubes.
     for quantity in ("angles_de_pale", "sens_de_rotation"):
         geometry.confidence.set(quantity, result.confidence.get_level(quantity))
+    assembly = result.assembly
+    toroidal = assembly.declarations.blade_topology == components_module.BLADE_TOROIDAL
+    strands = 2 if toroidal else 1
     _curves(result, options, topology, geometry)
-    _curve_analysis(result, topology, geometry, strands=1)
+    _curve_analysis(result, topology, geometry, strands=strands)
+    if toroidal and result.curves:
+        result.comparison = _components_comparison(result, angles, strands)
     if angles is None or len(angles.branches) < 2:
         return
     for quantity in ("debit", "hauteur", "puissance", "couple", "rendement", "npshr"):
@@ -1223,6 +1345,60 @@ def _components_hydraulics(result: AnalysisResult, options: Options) -> None:
             f"courbes calculees sur le {angles.working.name} seul, en confiance basse : l'effet "
             "des autres brins n'est pas modelise."
         )
+
+
+def _components_comparison(
+    result: AnalysisResult, angles: isolated_module.IsolatedBladeAngles | None, strands: int
+) -> comparison_module.Comparison | None:
+    """Comparatif du mode composants : la meme roue, a aubes d'un seul brin."""
+    assembly, topology = result.assembly, result.topology
+    inlet = rim = None
+    closed = None
+    if angles is not None and angles.working is not None:
+        entree = angles.axial_push if angles.axial_push and angles.axial_push.is_inlet else None
+        if entree is not None:
+            # Sans son brin amont, la roue normale aspire par le bord d'attaque
+            # de son aube.
+            inlet = comparison_module.PumpInlet(
+                r_1=angles.r_le, r_1h=angles.r_le_range[0], r_1s=angles.r_le_range[1],
+                area_1=2.0 * math.pi * angles.r_le * angles.le_height * config.TAU_1,
+                beta1_deg=angles.beta1_deg,
+                description=(
+                    f"sans le {entree.branch}, elle aspire par le bord d'attaque du "
+                    f"{angles.working.name}"
+                ),
+            )
+        closed = _closed_wheel(assembly, angles)
+    outlet = assembly.outlet
+    if outlet is not None and outlet.radial and topology.r_2 < (1.0 - config.EDGE_REACH) * outlet.radius:
+        rim = comparison_module.PumpOutletRim(radius=outlet.radius, area=outlet.free_area)
+    return comparison_module.pump(
+        result.meanline_input, result.curves[0], topology.b_2, strands, closed,
+        inlet=inlet, rim=rim, confidence=result.confidence.get_level("hauteur"),
+    )
+
+
+def _closed_wheel(
+    assembly: components_module.ComponentAssembly, angles: isolated_module.IsolatedBladeAngles
+) -> bool | None:
+    """La grille qui refoule est-elle fermee, dessus et dessous, par les parois de la roue ?
+
+    Sonde le plan meridien au rayon moyen du bord de fuite, de part et d'autre de
+    la grille, sur trois fois sa hauteur. `None` sans piece de paroi.
+    """
+    walls = components_module.meridian(assembly)
+    if walls is None or not walls.rotating:
+        return None
+    levels = angles.working.levels
+    z_low, z_high = min(l.z for l in levels), max(l.z for l in levels)
+    reach = 3.0 * max(angles.te_height, walls.cell)
+    steps = max(4, int(reach / walls.cell))
+
+    def wall_within(start: float, direction: int) -> bool:
+        return any(walls.wall(angles.r_te, start + direction * reach * k / steps)
+                   for k in range(1, steps + 1))
+
+    return wall_within(z_high, +1) and wall_within(z_low, -1)
 
 
 def _fill_provenance(result: AnalysisResult, options: Options) -> None:

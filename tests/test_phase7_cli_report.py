@@ -24,8 +24,9 @@ class CliTestCase(BaseTestCase):
     def setUp(self):
         super().setUp()
         self.source = self.path("roue.stl")
+        # L'outil n'etudie que les helices toroidales : la roue de reference en est une.
         writer.write_stl(
-            synthetic.centrifugal_impeller(), self.source, unit_factor=config.UNIT_FACTOR
+            synthetic.toroidal_propeller(), self.source, unit_factor=config.UNIT_FACTOR
         )
         self.out = self.path("rapport")
 
@@ -149,14 +150,34 @@ class TestCommandLine(CliTestCase):
     def test_unite_du_fichier(self):
         """--unit change l'echelle du modele importe."""
         path = self.path("roue_mm.stl")
-        writer.write_stl(synthetic.centrifugal_impeller(), path, unit_factor=0.001)
+        writer.write_stl(synthetic.toroidal_propeller(), path, unit_factor=0.001)
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             code = main([path, "--out", self.out, "--unit", "mm", *SMALL_GRID])
         self.assertEqual(code, 0)
         with open(os.path.join(self.out, report.JSON_NAME), encoding="utf-8") as handle:
             data = json.load(handle)
-        self.assertClose(data["topologie"]["r_2_m"], 0.090, rel=0.02)
+        # Meme piece, meme lecture : le fichier en millimetres, lu en --unit mm,
+        # rend le rayon du fichier en centimetres lu en --unit cm.
+        code, _, _ = self.invoke("--unit", "cm")
+        self.assertEqual(code, 0)
+        with open(os.path.join(self.out, report.JSON_NAME), encoding="utf-8") as handle:
+            reference = json.load(handle)
+        self.assertClose(data["topologie"]["r_2_m"], reference["topologie"]["r_2_m"], rel=0.02)
+
+    def test_piece_non_toroidale_refusee(self):
+        """L'outil n'etudie que les helices toroidales : une roue normale est refusee, avec la raison."""
+        path = self.path("roue_normale.stl")
+        writer.write_stl(synthetic.centrifugal_impeller(), path, unit_factor=config.UNIT_FACTOR)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main([path, "--out", self.out, *SMALL_GRID])
+        self.assertEqual(code, 0)
+        self.assertIn("ANALYSE INTERROMPUE : la piece n'est pas toroidale", out.getvalue())
+        with open(os.path.join(self.out, report.JSON_NAME), encoding="utf-8") as handle:
+            data = json.load(handle)
+        self.assertEqual(data["regimes"], [])
+        self.assertIn("pas toroidale", data["analyse_interrompue"])
 
     def test_erreur_d_import_signalee_proprement(self):
         """Un fichier non geometrique sort en erreur, avec un message, sans trace."""
