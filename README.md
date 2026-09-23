@@ -609,9 +609,18 @@ python -m impeller_analyzer --machine helice_libre --blades 5 \
 ```
 
 Trois déclarations — modèle hydraulique, topologie de pale, nombre de pales —
-qui ne sont jamais inférées en mode composants. Cinq emplacements, dont trois
-obligatoires (entrée fluide, sortie fluide, pale). Une seule pale est importée :
-les N−1 autres sont reconstruites par rotation.
+qui ne sont jamais inférées en mode composants. Cinq emplacements ; la pale est
+obligatoire, l'entrée et la sortie fluide aussi sauf si le corps de la roue est
+fourni, qui les donne. Une seule pale suffit : les N−1 autres sont reconstruites
+par rotation.
+
+Une roue se donne aussi comme on la dessine — le corps en plusieurs pièces,
+toutes les pales, et rien d'autre :
+
+```bash
+python -m impeller_analyzer --machine pompe_carenee --rotation horaire \
+    --moyeu corps.stl anti_retour.stl --pale p1.stl p2.stl p3.stl p4.stl p5.stl
+```
 
 ### Le contrat d'export
 
@@ -650,7 +659,33 @@ volume), position de la pale entre les deux plans, recouvrement des copies de la
 pale tournées de 2π/N, topologie déclarée confrontée au **genre topologique**,
 étanchéité, et **passage libre** : la part d'un solide fluide qu'occupe une paroi
 n'est pas une section de passage. L'aire retenue pour la suite est toujours la
-part libre ; le contrôle signale l'écart au-delà de 5 %.
+part libre ; le contrôle signale l'écart au-delà de 5 %. Deux s'ajoutent selon ce
+qui est fourni : **pales distinctes**, quand chaque pale a son fichier, et
+**entrée et sortie**, quand elles sont déduites du corps.
+
+### Une roue donnée comme on la dessine
+
+La roue d'essai hel2 est arrivée en sept fichiers : le corps, le disque
+anti-retour, et chacune des cinq pales. Aucun plan fluide. Trois choses l'ont
+rendue calculable telle quelle :
+
+- **Le corps en plusieurs pièces.** `--moyeu` prend plusieurs fichiers. Ils sont
+  réunis pour les rayons et les coupes, mais chaque pièce garde son propre test
+  de volume : le disque anti-retour de hel2 entre de 0,4 mm dans l'anneau du
+  corps, et dans un maillage fusionné la zone commune, traversée deux fois par
+  le rayon du test de parité, passait pour vide — juste là où la chambre haute se
+  ferme.
+- **Toutes les pales.** `--pale` prend plusieurs fichiers, et leur nombre donne N.
+  Un contrôle vérifie qu'elles sont les copies tournées d'une même pale : même
+  hauteur, même volume, un pas de 360/N degrés. Sur hel2, p2 était 4,18 mm plus
+  haute que les autres — exportée avant d'avoir été déplacée avec elles. Le
+  calcul prend pour modèle la pale qui s'accorde avec le plus d'autres.
+- **Ni entrée ni sortie.** Une roue fermée les montre. L'entrée est l'**œillard**,
+  le percement d'un flasque d'extrémité autour de l'axe ; la sortie, la **fente**
+  ouverte au bord de la roue entre deux parois. Les deux se lisent sur le plan
+  méridien du corps, et le contrôle « entrée et sortie » dit où elles ont été
+  posées. Une roue percée aux deux bouts, ou sans fente au bord, ne se laisse pas
+  deviner : l'outil demande alors les plans.
 
 ### Ce que la première roue réelle a appris au mode composants
 
@@ -1301,7 +1336,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-399 tests : une phase par module, le banc d'audit qui balaie des roues entières
+409 tests : une phase par module, le banc d'audit qui balaie des roues entières
 et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
 hélice libre, ce que l'outil a le droit d'affirmer, l'import par composants
 déclarés avec ses sept contrôles, les sorties visuelles — palette unique,

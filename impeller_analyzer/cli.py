@@ -86,15 +86,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     composants.add_argument("--coque", metavar="FICHIER", default=None,
                             help="STL de la coque (facultatif) : rayon de carter, jeu en bout")
-    composants.add_argument("--moyeu", metavar="FICHIER", default=None,
-                            help="STL du moyeu (recommande) : r1h et longueur de moyeu")
+    composants.add_argument("--moyeu", metavar="FICHIER", nargs="+", default=None,
+                            help="STL du corps de la roue (moyeu, flasques, disque "
+                                 "anti-retour...) ; un ou plusieurs fichiers. Il donne r1h, les "
+                                 "parois, et l'entree et la sortie si elles ne sont pas fournies")
     composants.add_argument("--entree-fluide", metavar="FICHIER", default=None,
-                            help="tranche mince du plan d'entree (obligatoire en mode composants)")
+                            help="tranche mince du plan d'entree ; sans elle, l'oeillard du "
+                                 "corps en tient lieu")
     composants.add_argument("--sortie-fluide", metavar="FICHIER", default=None,
-                            help="tranche mince du plan de sortie (obligatoire en mode composants)")
-    composants.add_argument("--pale", metavar="FICHIER", default=None,
-                            help="STL d'une seule pale (obligatoire en mode composants) ; "
-                                 "les N-1 autres sont reconstruites par rotation")
+                            help="tranche mince du plan de sortie ; sans elle, la fente au bord "
+                                 "du corps en tient lieu")
+    composants.add_argument("--pale", metavar="FICHIER", nargs="+", default=None,
+                            help="STL d'une pale (obligatoire en mode composants), ou de chacune : "
+                                 "fournies toutes, elles sont verifiees copies tournees les unes "
+                                 "des autres, et leur nombre donne N")
     composants.add_argument(
         "--topologie-pale",
         choices=list(components.BLADE_TOPOLOGIES),

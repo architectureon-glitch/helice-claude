@@ -22,12 +22,14 @@ qu'ils sont remplaces par une garantie plus forte.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field
 
 from . import config
 from .confidence import HIGH, LOW, MEDIUM, ConfidenceMap
 from .geometry.inclusion import SolidTester
 from .geometry.meridian import MeridianWalls, free_fraction
+from . import synthetic
 from .io import loader
 from .mesh import TriMesh, rotation_matrix
 from .numeric import jacobi_eigen
@@ -41,7 +43,7 @@ SLOT_INLET = "entree_fluide"
 SLOT_OUTLET = "sortie_fluide"
 SLOT_BLADE = "pale"
 SLOTS = (SLOT_SHELL, SLOT_HUB, SLOT_INLET, SLOT_OUTLET, SLOT_BLADE)
-REQUIRED_SLOTS = (SLOT_INLET, SLOT_OUTLET, SLOT_BLADE)
+REQUIRED_SLOTS = (SLOT_INLET, SLOT_OUTLET, SLOT_BLADE)  # entree et sortie : sauf si le moyeu les donne
 
 #: Topologie de pale declaree (SPEC v2 2).
 BLADE_CONVENTIONAL = "conventionnelle"
@@ -107,6 +109,10 @@ class Component:
     centroid: Vec3 = (0.0, 0.0, 0.0)
     low: Vec3 = (0.0, 0.0, 0.0)
     high: Vec3 = (0.0, 0.0, 0.0)
+    # Pieces d'un meme emplacement donnees en plusieurs fichiers (corps et
+    # anti-retour) : gardees separees pour les tests de volume, qu'un
+    # chevauchement entre elles fausserait (parite du rayon).
+    parts: list = field(default_factory=list)
 
     def radial_extent(self, axis: Vec3 = (0.0, 0.0, 0.0)) -> tuple[float, float]:
         """Rayons minimal et maximal autour de l'axe, en m.
@@ -215,6 +221,8 @@ class ComponentAssembly:
     checks: list[Check] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     confidence: ConfidenceMap = field(default_factory=ConfidenceMap)
+    blade_files: list = field(default_factory=list)  # les pales fournies une a une, s'il y en a plusieurs
+    derived: list = field(default_factory=list)  # emplacements fluide deduits du corps
 
     def blocked(self) -> Check | None:
         """Le premier controle bloquant en echec, s'il y en a un."""
@@ -270,6 +278,53 @@ def load_component(slot: str, path: str, unit: str | float | None = "cm") -> Com
         low=low,
         high=high,
     )
+
+
+def _component_from_mesh(slot: str, mesh: TriMesh, path: str, watertight: bool = True) -> Component:
+    low, high = mesh.bounds()
+    return Component(
+        slot=slot, path=path, mesh=mesh, watertight=watertight,
+        boundary_edges=len(mesh.boundary_edges()), volume=abs(mesh.volume()), area=mesh.area(),
+        centroid=mesh.centroid(), low=low, high=high,
+    )
+
+
+def load_components(slot: str, paths: list[str], unit: str | float | None = "cm") -> Component:
+    """Charge un emplacement donne en un ou plusieurs fichiers.
+
+    Plusieurs fichiers -- le corps et l'anti-retour d'une meme roue -- sont reunis
+    en une seule piece pour les rayons et les coupes, mais gardes separes dans
+    `parts` pour les tests de volume.
+    """
+    loaded = [load_component(slot, path, unit=unit) for path in paths]
+    if len(loaded) == 1:
+        return loaded[0]
+    vertices, faces = [], []
+    for piece in loaded:
+        offset = len(vertices)
+        vertices.extend(piece.mesh.vertices)
+        faces.extend((a + offset, b + offset, c + offset) for a, b, c in piece.mesh.faces)
+    merged = _component_from_mesh(
+        slot, TriMesh(vertices, faces), " + ".join(paths),
+        watertight=all(p.watertight for p in loaded),
+    )
+    merged.volume = sum(p.volume for p in loaded)
+    merged.parts = [p.mesh for p in loaded]
+    return merged
+
+
+def _testers(component: Component) -> list[SolidTester]:
+    """Un test de volume par piece de l'emplacement."""
+    meshes = component.parts or ([component.mesh] if component.mesh is not None else [])
+    return [SolidTester(mesh) for mesh in meshes]
+
+
+def _as_list(value) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [v for v in value if v]
+    return [value]
 
 
 def fluid_plane(component: Component) -> FluidPlane:
@@ -501,7 +556,7 @@ def wall_testers(assembly: ComponentAssembly) -> list[SolidTester]:
     for slot in (SLOT_HUB, SLOT_SHELL):
         component = assembly.component(slot)
         if component is not None and component.mesh is not None:
-            testers.append(SolidTester(component.mesh))
+            testers.extend(_testers(component))
     return testers
 
 
@@ -713,8 +768,9 @@ def _inside_fraction(outer: Component, inner: Component) -> float:
     """Part de la surface de `inner` situee dans le volume de `outer`."""
     if outer.mesh is None or inner.mesh is None:
         return 0.0
-    tester = SolidTester(outer.mesh)
-    return tester.fraction_inside(inner.mesh.sample_surface(config.INTERSECTION_SAMPLES))
+    points = inner.mesh.sample_surface(config.INTERSECTION_SAMPLES)
+    testers = _testers(outer)
+    return 1.0 - free_fraction(testers, points) if points else 0.0
 
 
 def check_no_interpenetration(assembly: ComponentAssembly) -> Check:
@@ -949,6 +1005,195 @@ def check_watertight(assembly: ComponentAssembly) -> Check:
 # ---------------------------------------------------------------------------
 # L'assemblage
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Emplacements fluide deduits du corps
+# ---------------------------------------------------------------------------
+def _runs(flags: list[bool]) -> list[tuple[bool, int, int]]:
+    """Plages contigues `(valeur, debut, fin incluse)` d'une suite de booleens."""
+    runs: list[tuple[bool, int, int]] = []
+    for index, flag in enumerate(flags):
+        if runs and runs[-1][0] == flag:
+            runs[-1] = (flag, runs[-1][1], index)
+        else:
+            runs.append((flag, index, index))
+    return runs
+
+
+def _eye(walls: MeridianWalls, z: float, r_max: float) -> tuple[float, float] | None:
+    """Oeillard d'un flasque d'extremite : plage libre pres de l'axe, fermee par le flasque.
+
+    Plage libre des l'axe, puis paroi : oeillard plein. Paroi sur l'axe (moyeu),
+    plage libre, puis paroi : oeillard annulaire. Sinon, pas d'oeillard.
+    """
+    cell = walls.cell
+    count = int(r_max / cell)
+    flags = [walls.wall((k + 0.5) * cell, z) for k in range(count)]
+    runs = _runs(flags)
+    if len(runs) >= 2 and not runs[0][0] and runs[1][0]:
+        inner, outer = 0.0, runs[0][2] + 1
+    elif len(runs) >= 3 and runs[0][0] and not runs[1][0] and runs[2][0]:
+        inner, outer = runs[1][1], runs[1][2] + 1
+    else:
+        return None
+    if outer - inner < config.DERIVED_MIN_CELLS:
+        return None
+    return inner * cell, outer * cell
+
+
+def _slot(walls: MeridianWalls, r: float, z_range: tuple[float, float]) -> tuple[float, float] | None:
+    """Fente au bord de la roue : la plus haute plage libre bordee de parois dessus et dessous."""
+    cell = walls.cell
+    j0 = int(math.floor(z_range[0] / cell)) - 1
+    j1 = int(math.floor(z_range[1] / cell)) + 1
+    flags = [walls.wall(r, (j + 0.5) * cell) for j in range(j0, j1 + 1)]
+    runs = _runs(flags)
+    bounded = [
+        (start, end) for index, (flag, start, end) in enumerate(runs)
+        if not flag and 0 < index < len(runs) - 1 and end - start + 1 >= config.DERIVED_MIN_CELLS
+    ]
+    if not bounded:
+        return None
+    start, end = max(bounded, key=lambda run: run[1] - run[0])
+    return (j0 + start) * cell, (j0 + end + 1) * cell
+
+
+def derive_fluid_slices(hub: Component) -> tuple[Component | None, Component | None, str]:
+    """Entree et sortie lues sur le corps, quand elles ne sont pas fournies.
+
+    Une roue de pompe fermee dit elle-meme ou l'eau entre et sort : par
+    l'**oeillard**, le percement d'un flasque d'extremite autour de l'axe, et
+    par la **fente** ouverte au bord de la roue, entre deux parois. Les deux se
+    lisent sur le plan meridien des parois. L'entree est un disque (ou une
+    couronne, s'il y a un moyeu) pose juste au-dela du flasque ; la sortie, une
+    bande juste au-dela du bord. Une roue percee aux deux bouts, ou sans fente
+    au bord, ne se laisse pas deviner : l'outil le dit et demande les plans.
+    """
+    lo, hi = hub.low, hub.high
+    axis = (0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]), 0.0)
+    r_max = hub.radial_extent(axis)[1]
+    walls = MeridianWalls(_testers(hub), axis, r_max, (lo[2], hi[2]), rotating=True)
+    cell = walls.cell
+    top = _eye(walls, hi[2] - config.DERIVED_PROBE_CELLS * cell, r_max)
+    bottom = _eye(walls, lo[2] + config.DERIVED_PROBE_CELLS * cell, r_max)
+    mm = config.MM_PER_M
+    inlet = outlet = None
+    raisons = []
+
+    def place(mesh: TriMesh) -> TriMesh:
+        return TriMesh([(v[0] + axis[0], v[1] + axis[1], v[2]) for v in mesh.vertices], mesh.faces)
+
+    thickness = config.DERIVED_SLICE_THICKNESS
+    gap = config.DERIVED_SLICE_GAP
+    if (top is None) == (bottom is None):
+        raisons.append(
+            "entree non deduite : " + ("les deux flasques d'extremite sont perces autour de "
+                                       "l'axe" if top else "aucun flasque d'extremite n'est "
+                                       "perce autour de l'axe")
+            + " -- fournissez --entree-fluide"
+        )
+    else:
+        (r_a, r_b), z_face, sign = (top, hi[2], 1.0) if top else (bottom, lo[2], -1.0)
+        r_a, r_b = r_a + (cell if r_a > 0.0 else 0.0), r_b - cell
+        z_center = z_face + sign * (gap + 0.5 * thickness)
+        mesh = (synthetic.cylinder(r_b, thickness, z_center=z_center) if r_a <= 0.0
+                else synthetic.tube(r_a, r_b, thickness, z_center=z_center))
+        inlet = _component_from_mesh(SLOT_INLET, place(mesh), "deduit du corps")
+        raisons.append(
+            f"entree : oeillard du flasque {'superieur' if top else 'inferieur'}, "
+            + (f"r < {r_b * mm:.1f} mm" if r_a <= 0.0 else f"r de {r_a * mm:.1f} a {r_b * mm:.1f} mm")
+            + f", disque pose a z = {z_center * mm:.1f} mm"
+        )
+    slot = _slot(walls, r_max - config.DERIVED_PROBE_CELLS * cell, (lo[2], hi[2]))
+    if slot is None:
+        raisons.append("sortie non deduite : aucune fente ouverte au bord de la roue -- fournissez "
+                       "--sortie-fluide")
+    else:
+        z_a, z_b = slot
+        mesh = synthetic.tube(r_max + gap, r_max + gap + thickness, z_b - z_a,
+                              z_center=0.5 * (z_a + z_b))
+        outlet = _component_from_mesh(SLOT_OUTLET, place(mesh), "deduit du corps")
+        raisons.append(
+            f"sortie : fente au bord de la roue, r = {r_max * mm:.1f} mm, z de {z_a * mm:.1f} a "
+            f"{z_b * mm:.1f} mm ({(z_b - z_a) * mm:.1f} mm de haut)"
+        )
+    return inlet, outlet, " ; ".join(raisons)
+
+
+# ---------------------------------------------------------------------------
+# Pales fournies une a une
+# ---------------------------------------------------------------------------
+def _blade_tolerance(blade: Component) -> float:
+    return max(config.BLADES_Z_TOLERANCE, config.BLADES_Z_TOLERANCE_REL * (blade.high[2] - blade.low[2]))
+
+
+def _same_place(a: Component, b: Component) -> bool:
+    tol = _blade_tolerance(a)
+    return (abs(a.low[2] - b.low[2]) < tol and abs(a.high[2] - b.high[2]) < tol
+            and abs(b.volume / a.volume - 1.0) < config.BLADES_VOLUME_TOLERANCE)
+
+
+def reference_blade(blades: list[Component]) -> Component:
+    """La pale qui s'accorde avec le plus d'autres : une pale mal placee ne sert pas de modele."""
+    return max(blades, key=lambda b: sum(1 for other in blades if _same_place(b, other)))
+
+
+def _azimuth(component: Component, axis: Vec3) -> tuple[float, float]:
+    vertices = component.mesh.vertices
+    cx = sum(v[0] for v in vertices) / len(vertices) - axis[0]
+    cy = sum(v[1] for v in vertices) / len(vertices) - axis[1]
+    return math.degrees(math.atan2(cy, cx)), math.hypot(cx, cy)
+
+
+def check_distinct_blades(assembly: ComponentAssembly) -> Check:
+    """9. Pales fournies une a une : sont-elles les copies tournees d'une meme pale ?
+
+    Meme volume, meme hauteur, et un pas de 360/N degres entre elles. Une pale
+    exportee avant d'avoir ete deplacee avec les autres -- hel2 : p2, 4,19 mm
+    plus haute -- se voit a sa hauteur. Le calcul prend pour modele la pale qui
+    s'accorde avec le plus d'autres, et reconstruit les N-1 autres par rotation.
+    """
+    blades = assembly.blade_files
+    ref = assembly.component(SLOT_BLADE)
+    n = len(blades)
+    name = lambda c: os.path.basename(c.path)
+    ecarts = []
+    tol = _blade_tolerance(ref)
+    azimuth_ref, lever = _azimuth(ref, assembly.axis_origin)
+    pitch = 360.0 / n
+    for blade in blades:
+        if blade is ref:
+            continue
+        defauts = []
+        dz = 0.5 * ((blade.low[2] - ref.low[2]) + (blade.high[2] - ref.high[2]))
+        if abs(dz) >= tol:
+            defauts.append(f"decalee de {dz * config.MM_PER_M:+.2f} mm en hauteur")
+        dv = blade.volume / ref.volume - 1.0
+        if abs(dv) >= config.BLADES_VOLUME_TOLERANCE:
+            defauts.append(f"volume {dv:+.1%}")
+        azimuth, blade_lever = _azimuth(blade, assembly.axis_origin)
+        if min(lever, blade_lever) >= config.BLADES_AZIMUTH_LEVER:
+            offset = (azimuth - azimuth_ref) % 360.0
+            error = abs(offset - pitch * round(offset / pitch))
+            if error > config.BLADES_AZIMUTH_TOLERANCE_DEG:
+                defauts.append(f"a {error:.1f} deg du pas de {pitch:.1f} deg")
+        if defauts:
+            ecarts.append(f"{name(blade)} : {', '.join(defauts)}")
+    declared = assembly.declarations.n_blades
+    nombre = (f" {n} pales fournies pour {declared} declarees." if declared != n else "")
+    if ecarts:
+        return Check(
+            "pales distinctes", False, False,
+            f"{'; '.join(ecarts)}.{nombre} Le calcul prend {name(ref)} pour modele et reconstruit "
+            "les autres par rotation ; verifiez l'export des pales signalees -- une pale deplacee "
+            "a part n'est plus a sa place dans la roue."
+        )
+    return Check(
+        "pales distinctes", declared == n, False,
+        f"les {n} pales sont des copies tournees de {name(ref)} : meme hauteur, meme volume, pas de "
+        f"{pitch:.0f} deg.{nombre}"
+    )
+
+
 def assemble(
     paths: dict, declarations: Declarations, unit: str | float | None = "cm"
 ) -> ComponentAssembly:
@@ -961,18 +1206,37 @@ def assemble(
     declarations.check()
     assembly = ComponentAssembly(declarations=declarations)
 
-    manquants = [slot for slot in REQUIRED_SLOTS if not paths.get(slot)]
+    paths = {slot: _as_list(paths.get(slot)) for slot in SLOTS}
+    # Sans plans fluide, le corps les donne : l'entree et la sortie ne sont
+    # obligatoires que sans moyeu.
+    requis = [SLOT_BLADE] + ([] if paths[SLOT_HUB] else [SLOT_INLET, SLOT_OUTLET])
+    manquants = [slot for slot in requis if not paths[slot]]
     if manquants:
         raise ValueError(
-            f"emplacement(s) obligatoire(s) vide(s) : {', '.join(manquants)}. "
-            f"L'entree fluide, la sortie fluide et la pale sont necessaires ; la coque et le "
-            "moyeu sont facultatifs."
+            f"emplacement(s) obligatoire(s) vide(s) : {', '.join(manquants)}. La pale est "
+            "necessaire ; l'entree et la sortie fluide aussi, sauf si le moyeu (le corps de la "
+            "roue) est fourni, qui les donne."
         )
 
     for slot in SLOTS:
-        path = paths.get(slot)
-        if path:
-            assembly.components[slot] = load_component(slot, path, unit=unit)
+        if not paths[slot]:
+            continue
+        if slot == SLOT_BLADE and len(paths[slot]) > 1:
+            assembly.blade_files = [load_component(slot, path, unit=unit) for path in paths[slot]]
+            assembly.components[slot] = reference_blade(assembly.blade_files)
+        else:
+            assembly.components[slot] = load_components(slot, paths[slot], unit=unit)
+
+    derived_detail = ""
+    if SLOT_INLET not in assembly.components or SLOT_OUTLET not in assembly.components:
+        inlet, outlet, derived_detail = derive_fluid_slices(assembly.components[SLOT_HUB])
+        for slot, piece in ((SLOT_INLET, inlet), (SLOT_OUTLET, outlet)):
+            if slot in assembly.components:
+                continue
+            if piece is None:
+                raise ValueError(f"emplacements fluide non deduits du corps : {derived_detail}.")
+            assembly.components[slot] = piece
+            assembly.derived.append(slot)
 
     for slot in (SLOT_SHELL, SLOT_HUB):
         if slot not in assembly.components:
@@ -1001,6 +1265,14 @@ def assemble(
         check_watertight(assembly),
         check_free_passage(assembly),
     ]
+    if assembly.blade_files:
+        assembly.checks.append(check_distinct_blades(assembly))
+    if assembly.derived:
+        assembly.checks.append(Check(
+            "entree et sortie", True, False,
+            f"deduites du corps, faute de plans fluide fournis -- {derived_detail}. Verifiez-les sur "
+            "la vue : elles fixent les sections et le sens debitant."
+        ))
     for check in assembly.checks:
         if not check.passed:
             assembly.warnings.append(f"[{check.name}] {check.detail}")
@@ -1011,7 +1283,8 @@ def assemble(
     assembly.confidence.set("assemblage", HIGH if rate == 0 else (MEDIUM if rate == 1 else LOW))
     assembly.confidence.set(
         "sections",
-        MEDIUM if any(assembly.inlet.warnings + assembly.outlet.warnings) else HIGH,
+        MEDIUM if any(assembly.inlet.warnings + assembly.outlet.warnings) or assembly.derived
+        else HIGH,
     )
     volumique = all(c.watertight for c in assembly.components.values())
     assembly.confidence.set("volume", HIGH if volumique else MEDIUM)

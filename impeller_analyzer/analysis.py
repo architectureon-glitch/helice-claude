@@ -902,10 +902,13 @@ def run_components(options: Options) -> AnalysisResult:
     """
     started = time.time()
     result = AnalysisResult(options=options)
+    blade_files = options.component_paths.get(components_module.SLOT_BLADE)
+    fournies = len(blade_files) if isinstance(blade_files, (list, tuple)) else 0
     declarations = components_module.Declarations(
         mode=options.machine,
         blade_topology=options.blade_topology,
-        n_blades=options.blades or 0,
+        # Les pales fournies une a une donnent leur nombre.
+        n_blades=options.blades or (fournies if fournies > 1 else 0),
     )
     assembly = components_module.assemble(
         options.component_paths, declarations, unit=options.unit
