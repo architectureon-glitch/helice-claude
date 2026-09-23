@@ -645,6 +645,73 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
         result.warnings.append(contradiction)
 
     # Phases 5 et 6 : hydraulique et cavitation.
+    _curves(result, options, topology, geometry)
+
+    # Garde-fou general : un angle pose sur une borne du domaine n'est pas une
+    # mesure, c'est un ecretage. Quelle qu'en soit la cause -- et il en reste
+    # forcement que je n'ai pas rencontrees -- il ne doit jamais sortir sans le
+    # dire.
+    if not geometry.forced_beta:
+        for nom, valeur in (("beta1", geometry.beta1_deg), ("beta2", geometry.beta2_deg)):
+            if _ecrete(valeur):
+                result.warnings.append(
+                    f"{nom} = {valeur:.1f} deg est pose sur une borne du domaine "
+                    f"({config.BETA_MIN_DEG:.0f} a {config.BETA_MAX_DEG:.0f}) : c'est un "
+                    "ecretage, pas une mesure. Les grandeurs qui en derivent ne veulent rien "
+                    f"dire ; imposez --{nom} si vous connaissez sa valeur."
+                )
+                result.confidence.set("angles_de_pale", LOW)
+
+    result.confidence.set(
+        "sens_de_rotation", HIGH if geometry.forced_rotation else LOW
+    )
+    if topology.rotation_ambiguity and not geometry.forced_rotation:
+        result.warnings.insert(0, topology.rotation_ambiguity)
+
+    _curve_analysis(result, topology, geometry, strands=2 if loops.looped else 1)
+
+    # Phase propulsive, sur demande. Elle ne remplace pas l'analyse de pompe :
+    # elle repond a une autre question -- la meme piece tournant en helice libre,
+    # non carenee -- et le module refuse de repondre si la roue n'est pas axiale.
+    # Le mode helice libre se declare, il ne se deduit pas. Il etait conditionne
+    # a la classification geometrique, ce qui le fermait des que celle-ci se
+    # trompait -- exactement le cas d'une helice a aubes en boucle, lue
+    # « centrifuge » parce que son rapport de rayons y ressemble.
+    declared = options.machine == MACHINE_PROPELLER
+    refused = options.machine == MACHINE_PUMP
+    wanted = options.propulsion_speed is not None or declared
+    if wanted and not refused:
+        result.propulsion = propulsion_module.analyse(
+            topology,
+            geometry,
+            rpm=max(options.speeds) if options.speeds else 0.0,
+            # Sans vitesse d'avance, une helice declaree libre est analysee a
+            # l'arret : la poussee statique est une grandeur utile en soi.
+            speed=options.propulsion_speed if options.propulsion_speed is not None else 0.0,
+            fluid=options.fluid,
+            forced=declared,
+        )
+        result.warnings.extend(result.propulsion.warnings)
+        result.confidence.set("propulsion", result.propulsion.confidence)
+    elif refused and options.propulsion_speed is not None:
+        result.warnings.append(
+            "une vitesse d'avance est demandee, mais la machine est declaree pompe carenee : "
+            "l'analyse en helice libre n'est pas faite. Otez --machine pompe_carenee, ou "
+            "declarez --machine helice_libre."
+        )
+
+    _fill_provenance(result, options)
+    result.elapsed_s = time.time() - started
+    return result
+
+
+def _curves(
+    result: AnalysisResult,
+    options: Options,
+    topology: topology_module.Topology,
+    geometry: blade_module.BladeGeometry,
+) -> list:
+    """Phases 5 et 6 : courbes caracteristiques, cavitation, vitesse limite."""
     data = meanline_module.MeanlineInput.from_geometry(topology, geometry)
     result.meanline_input = data
     hydraulic_confidence = meanline_module.confidence_of(topology, geometry)
@@ -688,28 +755,18 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
     if not result.discharge:
         result.discharge = blade_module.discharge_direction(topology, geometry)
 
+    return curves
 
-    # Garde-fou general : un angle pose sur une borne du domaine n'est pas une
-    # mesure, c'est un ecretage. Quelle qu'en soit la cause -- et il en reste
-    # forcement que je n'ai pas rencontrees -- il ne doit jamais sortir sans le
-    # dire.
-    if not geometry.forced_beta:
-        for nom, valeur in (("beta1", geometry.beta1_deg), ("beta2", geometry.beta2_deg)):
-            if _ecrete(valeur):
-                result.warnings.append(
-                    f"{nom} = {valeur:.1f} deg est pose sur une borne du domaine "
-                    f"({config.BETA_MIN_DEG:.0f} a {config.BETA_MAX_DEG:.0f}) : c'est un "
-                    "ecretage, pas une mesure. Les grandeurs qui en derivent ne veulent rien "
-                    f"dire ; imposez --{nom} si vous connaissez sa valeur."
-                )
-                result.confidence.set("angles_de_pale", LOW)
 
-    result.confidence.set(
-        "sens_de_rotation", HIGH if geometry.forced_rotation else LOW
-    )
-    if topology.rotation_ambiguity and not geometry.forced_rotation:
-        result.warnings.insert(0, topology.rotation_ambiguity)
-
+def _curve_analysis(
+    result: AnalysisResult,
+    topology: topology_module.Topology,
+    geometry: blade_module.BladeGeometry,
+    strands: int,
+) -> None:
+    """D'ou vient la hauteur, pertes du canal, sensibilite a la geometrie."""
+    curves = result.curves
+    data = result.meanline_input
     if curves:
         # Pertes calculees sur la geometrie du canal : elles ne remplacent pas
         # celles de la SPEC, elles servent a comparer deux roues entre elles.
@@ -734,7 +791,7 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
                 w1=best.w1,
                 w2=w_2,
                 head_theoretical=best.head_theoretical,
-                strands=2 if loops.looped else 1,
+                strands=strands,
             )
             result.warnings.extend(result.channel_losses.warnings)
 
@@ -794,40 +851,6 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
                 "varie tres vite. Hauteur et puissance sont a lire comme des ordres de grandeur ; "
                 "le debit et le NPSHr, qui n'en dependent pas de la meme facon, restent fiables."
             )
-
-    # Phase propulsive, sur demande. Elle ne remplace pas l'analyse de pompe :
-    # elle repond a une autre question -- la meme piece tournant en helice libre,
-    # non carenee -- et le module refuse de repondre si la roue n'est pas axiale.
-    # Le mode helice libre se declare, il ne se deduit pas. Il etait conditionne
-    # a la classification geometrique, ce qui le fermait des que celle-ci se
-    # trompait -- exactement le cas d'une helice a aubes en boucle, lue
-    # « centrifuge » parce que son rapport de rayons y ressemble.
-    declared = options.machine == MACHINE_PROPELLER
-    refused = options.machine == MACHINE_PUMP
-    wanted = options.propulsion_speed is not None or declared
-    if wanted and not refused:
-        result.propulsion = propulsion_module.analyse(
-            topology,
-            geometry,
-            rpm=max(options.speeds) if options.speeds else 0.0,
-            # Sans vitesse d'avance, une helice declaree libre est analysee a
-            # l'arret : la poussee statique est une grandeur utile en soi.
-            speed=options.propulsion_speed if options.propulsion_speed is not None else 0.0,
-            fluid=options.fluid,
-            forced=declared,
-        )
-        result.warnings.extend(result.propulsion.warnings)
-        result.confidence.set("propulsion", result.propulsion.confidence)
-    elif refused and options.propulsion_speed is not None:
-        result.warnings.append(
-            "une vitesse d'avance est demandee, mais la machine est declaree pompe carenee : "
-            "l'analyse en helice libre n'est pas faite. Otez --machine pompe_carenee, ou "
-            "declarez --machine helice_libre."
-        )
-
-    _fill_provenance(result, options)
-    result.elapsed_s = time.time() - started
-    return result
 
 
 def run_components(options: Options) -> AnalysisResult:
@@ -889,6 +912,7 @@ def run_components(options: Options) -> AnalysisResult:
         result.blades.notes.append(raison)
 
     _read_isolated_angles(result, assembly)
+    _components_hydraulics(result, options)
 
     _fill_provenance(result, options)
     for quantity in ("nombre_de_pales", "type_de_roue", "cote_aspiration", "axe"):
@@ -997,6 +1021,11 @@ def _topology_from_components(
     )
     for quantity in ("rayons", "sections", "nombre_de_pales", "type_de_roue", "axe"):
         topology.confidence.set(quantity, HIGH)
+    # Une section dont une paroi occupe une part notable a ete corrigee, pas lue.
+    planes = [p for p in (assembly.inlet, assembly.outlet) if p is not None]
+    if any(1.0 - p.free > config.FREE_PASSAGE_TOLERANCE for p in planes) or \
+            assembly.confidence.get_level("sections", HIGH) != HIGH:
+        topology.confidence.set("sections", MEDIUM)
     return topology
 
 
@@ -1060,15 +1089,17 @@ def _read_isolated_angles(
     blades.notes.extend(angles.notes)
     if angles.working is None:
         return
+    entree = angles.axial_push if angles.axial_push and angles.axial_push.is_inlet else None
     if declared[0] is None:
-        blades.beta1_deg = angles.beta1_deg
+        blades.beta1_deg = entree.helix_rms_deg if entree else angles.beta1_deg
     if declared[1] is None:
         blades.beta2_deg = angles.beta2_deg
     if not both_declared:
         result.confidence.set("angles_de_pale", angles.confidence)
     lecture = (
         f"angles lus sur la pale isolee, coupes horizontales {angles.working.du} : "
-        f"beta1 = {angles.beta1_deg:.1f} deg a r = {angles.r_le * config.MM_PER_M:.1f} mm, "
+        + ("angle d'attaque" if entree else "beta1")
+        + f" = {angles.beta1_deg:.1f} deg a r = {angles.r_le * config.MM_PER_M:.1f} mm, "
         f"beta2 = {angles.beta2_deg:.1f} deg a r = {angles.r_te * config.MM_PER_M:.1f} mm "
         "(moyennes sur la hauteur des bords). "
         "Un plan horizontal n'est la surface de courant que la ou l'ecoulement est radial : sur "
@@ -1076,6 +1107,13 @@ def _read_isolated_angles(
         "plane, et basse de 2 a 4 degres dans une veine inclinee de 30 degres, que le plan coupe "
         "en biais."
     )
+    if entree is not None:
+        lecture += (
+            f" L'eau entre dans la roue le long de l'axe, par le {entree.branch} qu'elle "
+            f"rencontre d'abord : beta1 est l'angle de sa vis au rayon moyen du passage, "
+            f"{entree.helix_rms_deg:.1f} deg a r = {entree.r_rms * config.MM_PER_M:.1f} mm. Le "
+            f"bord d'attaque du {angles.working.name}, en aval, recoit une eau deja entrainee."
+        )
     if declared != (None, None):
         lecture += (
             f" Valeurs retenues : beta1 = {blades.beta1_deg:.1f} deg, beta2 = "
@@ -1084,6 +1122,107 @@ def _read_isolated_angles(
     blades.notes.append(lecture)
     if angles.layout_detail:
         result.warnings.insert(0, angles.layout_detail)
+
+
+def _blade_edges(topology: topology_module.Topology, angles: isolated_module.IsolatedBladeAngles) -> None:
+    """Rayons et sections du modele 1D, pris aux bords de la roue et non aux solides fluide.
+
+    Le modele prend r1, A1 et beta1 la ou l'eau aborde les aubes, r2, A2 et beta2
+    la ou elle les quitte. Chaque plan de coupe est une surface de courant
+    d'epaisseur `level_step` : la section d'un bord est `2 pi r h`, `h` etant la
+    hauteur des niveaux qui le portent, obstruction par l'epaisseur des aubes
+    comprise (TAU_1, TAU_2), comme en import global. Quand l'eau entre le long
+    de l'axe par un brin amont, l'entree est la couronne de passage qu'elle y
+    traverse. La fente de sortie, elle, est au-dela du bord de fuite : l'eau y
+    arrive par une couronne sans aube, ou son moment cinetique se conserve.
+    """
+    mm = config.MM_PER_M
+    working = angles.working
+    fente_r, fente_a = topology.r_2, topology.area_2
+    entree = angles.axial_push if angles.axial_push and angles.axial_push.is_inlet else None
+    if entree is not None:
+        topology.r_1 = entree.r_rms
+        topology.r_1h, topology.r_1s = entree.passage
+        topology.area_1 = entree.area * config.TAU_1
+        origine = (
+            f"entree par la vis du {entree.branch}, couronne de r = {entree.passage[0] * mm:.1f} a "
+            f"{entree.passage[1] * mm:.1f} mm"
+        )
+    else:
+        topology.r_1 = angles.r_le
+        topology.r_1h, topology.r_1s = angles.r_le_range
+        topology.area_1 = 2.0 * math.pi * angles.r_le * angles.le_height * config.TAU_1
+        origine = (
+            f"entree au bord d'attaque {working.du}, sur {angles.le_height * mm:.1f} mm de hauteur"
+        )
+    topology.r_2 = angles.r_te
+    topology.r_2h, topology.r_2s = angles.r_te_range
+    topology.b_2 = angles.te_height
+    topology.area_2 = 2.0 * math.pi * angles.r_te * angles.te_height * config.TAU_2
+    topology.confidence.set("rayons", MEDIUM)
+    topology.confidence.set("sections", MEDIUM)
+    topology.notes.append(
+        f"modele de ligne moyenne pris aux bords de la roue : {origine} (r1 = "
+        f"{topology.r_1 * mm:.1f} mm, A1 = {topology.area_1 * 1e4:.1f} cm2) ; sortie au bord de "
+        f"fuite {working.du} (r2 = {topology.r_2 * mm:.1f} mm, b2 = {topology.b_2 * mm:.1f} mm, "
+        f"A2 = {topology.area_2 * 1e4:.1f} cm2). La fente de sortie mesuree (r = "
+        f"{fente_r * mm:.1f} mm, {fente_a * 1e4:.1f} cm2 libres) est au-dela du bord de fuite."
+    )
+
+
+def _components_hydraulics(result: AnalysisResult, options: Options) -> None:
+    """Courbes caracteristiques en mode composants, sur la roue telle que la pale la montre."""
+    topology, geometry = result.topology, result.blades
+    if options.machine == MACHINE_PROPELLER:
+        result.warnings.append(
+            "helice libre declaree : la poussee n'est pas encore calculee en mode composants ; "
+            "seule la geometrie est publiee."
+        )
+        return
+    angles = result.isolated_angles
+    if angles is not None and angles.axial_push is not None and angles.axial_push.upstream \
+            and not angles.axial_push.is_inlet:
+        result.warnings.append(
+            f"courbes non calculees : pour le sens de rotation retenu, le {angles.axial_push.branch}, "
+            "que l'eau rencontre en premier, ne la pousse pas vers le brin qui refoule."
+        )
+        return
+    if geometry.beta2_deg <= 0.0 or geometry.beta1_deg <= 0.0:
+        result.warnings.append(
+            "courbes caracteristiques non calculees : il leur faut beta1 et beta2, lus sur la "
+            "pale isolee ou imposes par --beta1 et --beta2."
+        )
+        return
+    if angles is not None and angles.working is not None:
+        _blade_edges(topology, angles)
+        for quantity in ("rayons", "sections"):
+            result.confidence.set(quantity, topology.confidence.get_level(quantity))
+    # La confiance des angles et du sens vit dans la table du resultat en mode
+    # composants ; le modele la lit sur la geometrie des aubes.
+    for quantity in ("angles_de_pale", "sens_de_rotation"):
+        geometry.confidence.set(quantity, result.confidence.get_level(quantity))
+    _curves(result, options, topology, geometry)
+    _curve_analysis(result, topology, geometry, strands=1)
+    if angles is None or len(angles.branches) < 2:
+        return
+    for quantity in ("debit", "hauteur", "puissance", "couple", "rendement", "npshr"):
+        result.confidence.set(quantity, LOW)
+    entree = angles.axial_push if angles.axial_push and angles.axial_push.is_inlet else None
+    if entree is not None:
+        result.warnings.append(
+            f"courbes calculees sur la roue en serie, en confiance basse : entree par la vis du "
+            f"{entree.branch} (beta1 = {geometry.beta1_deg:.1f} deg), sortie par le bord de fuite "
+            f"du {angles.working.name} (beta2 = {geometry.beta2_deg:.1f} deg). Le travail d'Euler "
+            "ne depend que de ces deux bords : l'entrainement que le premier brin donne a l'eau "
+            "est interne a la roue. Ne sont pas modelisees l'incidence au bord d'attaque du "
+            f"{angles.working.name}, ou l'eau arrive deja entrainee, ni les pertes du coude entre "
+            "les deux brins."
+        )
+    else:
+        result.warnings.append(
+            f"courbes calculees sur le {angles.working.name} seul, en confiance basse : l'effet "
+            "des autres brins n'est pas modelise."
+        )
 
 
 def _fill_provenance(result: AnalysisResult, options: Options) -> None:

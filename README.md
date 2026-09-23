@@ -719,6 +719,42 @@ d'attaque incliné) et β2 ≈ 23° (de 14 à 39°), en confiance basse. Les pre
 chiffres publiés, 67,5 et 27°, venaient des seuls niveaux du haut et d'une lecture
 décalée vers l'autre bord.
 
+### Les courbes en mode composants
+
+Le modèle de ligne moyenne prend r1, A1 et β1 là où l'eau aborde les aubes, r2, A2
+et β2 là où elle les quitte. En mode composants, ces bords se lisent sur la pale
+elle-même, et non sur les solides fluide :
+
+- **Sortie : le bord de fuite de la grille qui refoule.** r2 est son rayon moyen,
+  b2 sa hauteur, A2 = 2π·r2·b2·τ2. Chaque plan de coupe est une surface de courant
+  d'épaisseur connue ; la hauteur d'un bord est celle des niveaux qui le portent.
+  La fente de sortie, mesurée et publiée, est au-delà : l'eau y arrive par une
+  couronne sans aube.
+- **Entrée : le bord d'attaque de cette même grille**, A1 = 2π·r1·h1·τ1, sauf quand
+  l'eau rencontre d'abord un autre brin en amont, qu'elle traverse le long de l'axe
+  et qui la pousse vers l'aval. La roue est alors une seule roue à deux grilles en
+  série : l'entrée est la couronne de passage, β1 l'angle de la vis de ce brin au
+  rayon moyen. Le travail d'Euler ne dépend que du premier bord et du dernier ;
+  l'entraînement que le premier brin donne à l'eau est interne à la roue.
+  L'incidence au bord d'attaque de la seconde grille et les pertes du coude entre
+  les deux ne sont pas modélisées, et les courbes sortent en confiance basse.
+- **Si ce brin amont renvoie l'eau vers l'œillard**, pour le sens de rotation
+  déclaré, aucune courbe n'est publiée.
+
+Sur hel1, en rotation horaire, l'entrée est l'ouverture du disque intermédiaire
+(r = 39 à 61 mm, A1 = 62,5 cm² obstruction comprise, β1 = 10,3°) et la sortie le
+bord de fuite du brin bas (r2 = 85 mm, b2 = 12,7 mm, β2 = 23°). À 1450 tr/min :
+32 m³/h au point d'incidence nulle pour 8,6 m, 13,5 m à débit nul, NPSHr de
+1,4 m ; à 2900 tr/min, 64 m³/h pour 34 m. Tout est en confiance basse : les deux
+bords du brin bas sont très vrillés, et la seconde grille est traitée comme la
+suite de la première. Le rendement affiché au meilleur point n'est pas une
+prédiction : c'est la valeur de référence sur laquelle le modèle cale ses pertes.
+
+Lire β1 comme la moyenne des angles d'attaque du brin bas, 47°, plaçait le débit
+d'incidence nulle au-delà du débit de hauteur nulle, et aucune courbe ne sortait :
+dans l'ouverture, l'eau descend le long de l'axe, et c'est l'angle de la vis
+qu'elle voit, pas celui d'un profil coupé à plat.
+
 ### Le genre topologique tranche ce que l'occupation ne peut pas
 
 Une aube en boucle est un tore : une anse par pale. Le fichier d'essai réel rend
@@ -1206,7 +1242,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-382 tests : une phase par module, le banc d'audit qui balaie des roues entières
+385 tests : une phase par module, le banc d'audit qui balaie des roues entières
 et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
 hélice libre, ce que l'outil a le droit d'affirmer, l'import par composants
 déclarés avec ses sept contrôles, les sorties visuelles — palette unique,

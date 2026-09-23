@@ -366,7 +366,9 @@ def write_markdown(result: AnalysisResult, directory: str, source: str = "") -> 
             lines.append(
                 f"Sections **mesurees** sur les tranches fluide, `volume / epaisseur` : "
                 f"A1 = {assembly.inlet.area * 1e4:.2f} cm2, "
-                f"A2 = {assembly.outlet.area * 1e4:.2f} cm2. Elles ne dependent plus de la "
+                f"A2 = {assembly.outlet.area * 1e4:.2f} cm2 ; libres de toute paroi : "
+                f"{assembly.inlet.free_area * 1e4:.2f} et {assembly.outlet.free_area * 1e4:.2f} "
+                "cm2. Elles ne dependent plus de la "
                 "detection de r1s et r1h, dont la fragilite est la cause premiere des ecarts "
                 "de debit. Sens debitant mesure : "
                 f"({', '.join(f'{c:+.2f}' for c in assembly.flow_direction)})."

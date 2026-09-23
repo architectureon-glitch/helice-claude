@@ -111,6 +111,14 @@ class AxialPush:
     toward_working: float = 0.0  # part des rayons ou il pousse l'eau vers le brin qui refoule
     helix_deg: float = 0.0  # angle moyen de la vis, depuis la tangente : petit, vis serree
     samples: int = 0
+    upstream: bool = False  # le brin est entre l'entree et le brin qui refoule : l'eau le rencontre d'abord
+    r_rms: float = 0.0  # m, rayon quadratique moyen du passage
+    helix_rms_deg: float = 0.0  # angle de la vis a ce rayon : l'angle d'entree de la roue
+
+    @property
+    def area(self) -> float:
+        """Section du passage, couronne entre ses deux rayons, m2."""
+        return math.pi * (self.passage[1] ** 2 - self.passage[0] ** 2)
 
     def to_dict(self) -> dict:
         return {
@@ -118,8 +126,16 @@ class AxialPush:
             "passage_r_m": list(self.passage),
             "part_poussant_vers_le_brin_refoulant": self.toward_working,
             "angle_d_helice_deg": self.helix_deg,
+            "rayon_quadratique_moyen_m": self.r_rms,
+            "angle_d_helice_au_rayon_moyen_deg": self.helix_rms_deg,
             "rayons_sondes": self.samples,
+            "en_amont_du_brin_refoulant": self.upstream,
         }
+
+    @property
+    def is_inlet(self) -> bool:
+        """Vrai si ce brin est l'entree de la roue : en amont, et poussant l'eau vers l'aval."""
+        return self.upstream and self.toward_working >= config.AXIAL_PUSH_AGREEMENT
 
 
 def _theta_at(camber: list[tuple[float, float]], r: float) -> float | None:
@@ -158,6 +174,10 @@ class IsolatedBladeAngles:
     r_le: float = 0.0  # m, rayon moyen du bord d'attaque du brin refoulant
     r_te: float = 0.0  # m, rayon moyen du bord de fuite du brin refoulant
     r_te_range: tuple[float, float] = (0.0, 0.0)
+    r_le_range: tuple[float, float] = (0.0, 0.0)
+    level_step: float = 0.0  # m, ecart entre deux plans de coupe : l'epaisseur d'une surface de courant
+    le_height: float = 0.0  # m, hauteur du bord d'attaque : niveaux qui le portent x level_step
+    te_height: float = 0.0  # m, hauteur du bord de fuite
     beta1_spread: tuple[float, float] = (0.0, 0.0)
     beta2_spread: tuple[float, float] = (0.0, 0.0)
     layout: str = ""  # disposition des brins : parallele, un_seul_refoule, indeterminee
@@ -177,6 +197,9 @@ class IsolatedBladeAngles:
             "rayon_d_attaque_m": self.r_le or None,
             "rayon_de_fuite_m": self.r_te or None,
             "rayon_de_fuite_min_max_m": list(self.r_te_range),
+            "rayon_d_attaque_min_max_m": list(self.r_le_range),
+            "hauteur_du_bord_d_attaque_m": self.le_height,
+            "hauteur_du_bord_de_fuite_m": self.te_height,
             "beta2_min_max_deg": list(self.beta2_spread),
             "disposition_des_brins": self.layout or None,
             "poussee_axiale_du_brin_non_refoulant": (
@@ -353,6 +376,7 @@ def read_isolated_blade(
     result = IsolatedBladeAngles()
     lo, hi = mesh.bounds()
     count = config.ISOLATED_LEVELS
+    result.level_step = (hi[2] - lo[2]) / count
     for k in range(count):
         z = lo[2] + (k + 0.5) * (hi[2] - lo[2]) / count
         profile = level_profile(mesh, axis, z, rotation_sign)
@@ -468,6 +492,9 @@ def read_isolated_blade(
     result.r_te = sum(l.r_max for l in exits) / len(exits)
     result.r_te_range = (min(l.r_max for l in exits), max(l.r_max for l in exits))
     result.r_le = sum(l.r_min for l in entries) / len(entries)
+    result.r_le_range = (min(l.r_min for l in entries), max(l.r_min for l in entries))
+    result.le_height = len(entries) * result.level_step
+    result.te_height = len(exits) * result.level_step
     result.beta2_deg = sum(l.beta_te_deg for l in exits) / len(exits)
     result.beta1_deg = sum(l.beta_le_deg for l in entries) / len(entries)
     working.beta_le_deg, working.beta_te_deg = result.beta1_deg, result.beta2_deg
@@ -486,8 +513,8 @@ def read_isolated_blade(
             f"{min(le):.0f} a {max(le):.0f} deg selon la hauteur"
             + (f", de r = {min(l.r_min for l in entries) * mm:.0f} a "
                f"{max(l.r_min for l in entries) * mm:.0f} mm" if len(entries) > 1 else "")
-            + f". beta1 = {result.beta1_deg:.1f} deg en est la moyenne ; aucun debit "
-            "d'adaptation unique ne convient a toute la hauteur de l'aube."
+            + f". Son angle d'attaque moyen, {result.beta1_deg:.1f} deg, ne represente pas "
+            "toute la hauteur : aucun debit d'adaptation unique n'y convient."
         )
     if max(te) - min(te) > config.LE_TWIST_WARN_DEG:
         low_confidence = True
@@ -544,6 +571,8 @@ def read_isolated_blade(
                 f"qui le traverse pour gagner le {working.name} : en serie, en amont.{courbure}"
             )
             push = _axial_push(muets[0], working, walls, rotation_sign)
+            if push is not None:
+                push.upstream = abs(muets[0].z_mean - inlet_z) < abs(working.z_mean - inlet_z)
             result.axial_push = push
             if push is not None:
                 a, b = (x * mm for x in push.passage)
@@ -573,11 +602,19 @@ def read_isolated_blade(
                         "roue, tourne en bloc avec l'eau qu'elle contient : le brin n'y fait pas "
                         "travailler l'eau."
                     )
-            detail += (
-                f" Le modele de ligne moyenne ne decrit que le {working.name} : la prerotation "
-                "que l'autre brin donne a l'eau n'y est pas comptee, et ses angles de profil, "
-                "lus dans des plans que l'eau n'y suit pas, sont indicatifs."
-            )
+            if push is not None and push.is_inlet:
+                detail += (
+                    " Le modele de ligne moyenne traite les deux brins comme une seule roue : "
+                    f"l'eau y entre par la vis du {push.branch}, sur le passage, et en sort par le "
+                    f"bord de fuite du {working.name}. Ses angles de profil, lus dans des plans "
+                    "que l'eau n'y suit pas, sont indicatifs."
+                )
+            else:
+                detail += (
+                    f" Le modele de ligne moyenne ne decrit que le {working.name} : l'effet de "
+                    "l'autre brin n'y est pas compte, et ses angles de profil, lus dans des plans "
+                    "que l'eau n'y suit pas, sont indicatifs."
+                )
             result.layout_detail = detail
 
     result.confidence = LOW if low_confidence else MEDIUM
@@ -629,10 +666,16 @@ def _axial_push(
         helix.append(math.degrees(math.atan2(1.0, r * abs(twist))))
     if not pushes:
         return None
-    return AxialPush(
+    push = AxialPush(
         branch=branch.name,
         passage=(min(passage), max(passage)),
         toward_working=sum(pushes) / len(pushes),
         helix_deg=sum(helix) / len(helix),
         samples=len(pushes),
     )
+    push.r_rms = math.sqrt(0.5 * (push.passage[0] ** 2 + push.passage[1] ** 2))
+    twist = axial_twist(branch.levels, push.r_rms)
+    push.helix_rms_deg = (
+        math.degrees(math.atan2(1.0, push.r_rms * abs(twist))) if twist else push.helix_deg
+    )
+    return push

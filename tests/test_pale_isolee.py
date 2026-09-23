@@ -173,14 +173,18 @@ class TestBrins(BaseTestCase):
 
 
 def parois(chambre_haute_fermee: bool):
-    """Disque arriere, disque intermediaire et, au besoin, flasque avant ferme au bord."""
+    """Disque arriere et, au besoin, chambre haute fermee au bord, comme sur hel1.
+
+    La chambre haute est un seul solide de revolution : disque intermediaire
+    (r > 60 mm), bord ferme, flasque avant perce d'un oeillard de 40 mm. Des
+    pieces separees aux faces confondues faussaient le volume du corps.
+    """
     pieces = [synthetic.cylinder(0.097, 0.003, z_center=-0.0015)]  # disque arriere
     if chambre_haute_fermee:
-        pieces += [
-            synthetic.tube(0.060, 0.092, 0.001, z_center=0.011),     # disque intermediaire
-            synthetic.tube(0.092, 0.097, 0.0155, z_center=0.01825),  # bord ferme, z 0.0105-0.026
-            synthetic.cylinder(0.092, 0.003, z_center=0.0245),       # flasque avant
-        ]
+        pieces.append(synthetic.revolve([
+            (0.060, 0.0105), (0.097, 0.0105), (0.097, 0.026), (0.040, 0.026),
+            (0.040, 0.023), (0.092, 0.023), (0.092, 0.0115), (0.060, 0.0115),
+        ], 180))
     return decale(synthetic.combine(pieces))
 
 
@@ -361,6 +365,61 @@ class TestChaineComposants(ComposantsTestCase):
                                         component_paths=paths, rotation=1))
         self.assertIsNone(result.isolated_angles)
         self.assertTrue(any("refoulement axial" in w for w in result.warnings))
+
+
+class TestHydrauliqueComposants(ComposantsTestCase):
+    """Les courbes, sur la roue telle que la pale la montre."""
+
+    def pieces(self, blade, corps):
+        return {
+            components.SLOT_INLET: self.ecrire(decale(synthetic.cylinder(0.038, 0.001, z_center=0.050)), "e.stl"),
+            components.SLOT_OUTLET: self.ecrire(decale(synthetic.tube(0.095, 0.096, 0.010, z_center=0.005)), "s.stl"),
+            components.SLOT_HUB: self.ecrire(corps, "c.stl"),
+            components.SLOT_BLADE: self.ecrire(blade, "p.stl"),
+        }
+
+    def analyser(self, blade, corps, **options):
+        valeurs = dict(unit="cm", machine="pompe_carenee", blades=5, speeds=(1450.0,),
+                       component_paths=self.pieces(blade, corps))
+        valeurs.update(options)
+        return run_components(Options(**valeurs))
+
+    def test_aube_conventionnelle_bords_de_la_pale(self):
+        """r2 est le bord de fuite (90 mm), pas la fente (95,5) ; A1 au bord d'attaque."""
+        from impeller_analyzer import config
+
+        corps = decale(synthetic.cylinder(0.097, 0.003, z_center=-0.0015))
+        result = self.analyser(aube(20.0, 30.0), corps, rotation=-1)
+        topologie = result.topology
+        self.assertLess(abs(topologie.r_2 - 0.090), 5e-4)
+        self.assertLess(abs(topologie.b_2 - 0.012), 5e-4)
+        attendu = 2.0 * math.pi * 0.035 * 0.012 * config.TAU_1
+        self.assertLess(abs(topologie.area_1 / attendu - 1.0), 0.03)
+        self.assertTrue(result.curves and result.curves[0].points)
+        # Debit d'incidence nulle : u1 tan(beta1) A1.
+        omega = 1450.0 * config.RPM_TO_RAD_S
+        q = omega * topologie.r_1 * math.tan(math.radians(result.blades.beta1_deg)) * topologie.area_1
+        self.assertLess(abs(result.curves[0].flow_nominal / q - 1.0), 1e-6)
+        self.assertEqual(result.confidence.get_level("sections"), "medium")
+
+    def test_roue_en_serie_entree_par_la_vis_amont(self):
+        """Brin haut en vis sur le passage : beta1 est l'angle de la vis, r1 le passage."""
+        result = self.analyser(boucle(TestAntiRetour.PAS), parois(True), rotation=-1,
+                               blade_topology=components.BLADE_TOROIDAL)
+        poussee = result.isolated_angles.axial_push
+        self.assertTrue(poussee.is_inlet)
+        self.assertLess(abs(result.topology.r_1 - poussee.r_rms), 1e-9)
+        attendu = math.degrees(math.atan2(1.0, poussee.r_rms * abs(TestAntiRetour.PAS)))
+        self.assertLess(abs(result.blades.beta1_deg - attendu), 1.0)
+        self.assertTrue(result.curves and result.curves[0].points)
+        self.assertEqual(result.confidence.get_level("hauteur"), "low")
+        self.assertTrue(any("roue en serie" in w for w in result.warnings))
+
+    def test_vis_amont_a_contre_sens_pas_de_courbes(self):
+        result = self.analyser(boucle(TestAntiRetour.PAS), parois(True), rotation=+1,
+                               blade_topology=components.BLADE_TOROIDAL)
+        self.assertEqual(result.curves, [])
+        self.assertTrue(any("courbes non calculees" in w for w in result.warnings))
 
 
 if __name__ == "__main__":  # pragma: no cover - execution directe
