@@ -865,14 +865,14 @@ def run_components(options: Options) -> AnalysisResult:
 
     # §5.1 : le sens debitant etant mesure, le sens de rotation se deduit.
     result.blades = blade_module.BladeGeometry()
-    sign, raison = components_module.rotation_from_flow(assembly)
+    sign, raison, niveau = components_module.rotation_from_flow(assembly)
     if options.rotation is not None:
         result.blades.rotation_sign = 1 if options.rotation > 0 else -1
         result.blades.forced_rotation = True
         result.confidence.set("sens_de_rotation", HIGH)
     elif sign:
         result.blades.rotation_sign = sign
-        result.confidence.set("sens_de_rotation", HIGH)
+        result.confidence.set("sens_de_rotation", niveau)
         result.provenance.set("sens_de_rotation", MESURE)
     else:
         result.confidence.set("sens_de_rotation", LOW)

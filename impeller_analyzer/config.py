@@ -239,7 +239,9 @@ BAND_LATERAL_NZ = 0.5  # - - composante axiale maximale de la normale d'une face
 RECENTRE_TOLERANCE = 0.01  # - - fraction du rayon exterieur en deca de laquelle un centroide colle a l'origine trahit une piece recentree a l'export (SPEC v2 6.1)
 COAXIAL_TOLERANCE = 0.02  # - - ecart admis entre les centres, dans le plan XY, des pieces de revolution (entree, sortie, moyeu), rapporte au rayon exterieur : au-dela, elles ne sont pas sur le meme axe
 CORNER_TOLERANCE = 0.0005  # m - deux pieces de tailles differentes dont les boites ont le meme coin a cette tolerance pres ont ete deplacees chacune de son cote (STLOUT d'AutoCAD exige l'octant positif)
-OVERLAP_TOLERANCE = 0.05  # - - recouvrement admis entre boites englobantes de composants, en fraction du plus petit volume (SPEC v2 6.2)
+OVERLAP_TOLERANCE = 0.20  # - - interpenetration admise entre composants : part de la surface de l'un situee dans le volume de l'autre (SPEC v2 6.2 : 5 % de boites, inapplicable a une roue fermee). Mesure sur la roue d'essai hel1 : 9 % de la pale plonge dans moyeu et flasque, pour la soudure ; une piece mal placee depasse largement
+INTERSECTION_SAMPLES = 2000  # points - echantillonnage des surfaces pour les tests de recouvrement en volume (copies de pale, pale dans le moyeu)
+COPY_OVERLAP_TOLERANCE = 0.10  # - - part de la surface d'une copie tournee de la pale admise dans le volume de l'original. Mesure sur hel1 : 5 % a N = 5, les pales reelles etant soudees entre elles ; 14 % a N = 12. Le controle attrape l'erreur grossiere, il ne departage pas N et N+1
 BLADE_COPY_CLEARANCE = 0.0  # m - jeu minimal exige entre deux copies de pale voisines ; zero, seul le recoupement compte
 DECLARED_BLADES_MIN = 2  # nombre de pales declarable minimal (SPEC v2 2)
 DECLARED_BLADES_MAX = 24  # nombre de pales declarable maximal (SPEC v2 2)

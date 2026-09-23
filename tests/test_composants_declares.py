@@ -82,6 +82,33 @@ def tore(major: float = 0.060, minor: float = 0.012, offset=ORIGINE_CAO) -> TriM
     return TriMesh(vertices, faces)
 
 
+def secteur_plan(r_in: float, r_out: float, span_deg: float, thickness: float,
+                 offset=ORIGINE_CAO, n: int = 24) -> TriMesh:
+    """Secteur annulaire plan et epais : une pale sans pas, qui ne s'emboite pas."""
+    span = math.radians(span_deg)
+    vertices = []
+    for z in (-thickness / 2, thickness / 2):
+        for k in range(n + 1):
+            a = span * k / n
+            for r in (r_in, r_out):
+                vertices.append((r * math.cos(a) + offset[0], r * math.sin(a) + offset[1], z + offset[2]))
+    idx = lambda layer, k, side: layer * 2 * (n + 1) + 2 * k + side
+    faces = []
+    for k in range(n):
+        faces += [(idx(0, k, 0), idx(0, k + 1, 1), idx(0, k, 1)), (idx(0, k, 0), idx(0, k + 1, 0), idx(0, k + 1, 1))]
+        faces += [(idx(1, k, 0), idx(1, k, 1), idx(1, k + 1, 1)), (idx(1, k, 0), idx(1, k + 1, 1), idx(1, k + 1, 0))]
+        faces += [(idx(0, k, 1), idx(0, k + 1, 1), idx(1, k + 1, 1)), (idx(0, k, 1), idx(1, k + 1, 1), idx(1, k, 1))]
+        faces += [(idx(0, k, 0), idx(1, k + 1, 0), idx(0, k + 1, 0)), (idx(0, k, 0), idx(1, k, 0), idx(1, k + 1, 0))]
+    for k, sign in ((0, 1), (n, -1)):
+        quad = [idx(0, k, 0), idx(0, k, 1), idx(1, k, 1), idx(1, k, 0)]
+        tri = [(quad[0], quad[1], quad[2]), (quad[0], quad[2], quad[3])]
+        faces += tri if sign > 0 else [(a, c, b) for a, b, c in tri]
+    mesh = TriMesh(vertices, faces)
+    if mesh.volume() < 0.0:
+        mesh = TriMesh(vertices, [(a, c, b) for a, b, c in faces])
+    return mesh
+
+
 class ComposantsTestCase(BaseTestCase):
     """Ecrit les pieces sur disque et les assemble."""
 
@@ -185,12 +212,23 @@ class TestControles(ComposantsTestCase):
         self.assertTrue(self.resultat(assembly, "repere commun").passed)
 
     def test_trop_de_pales_declarees(self):
-        """Reconstruire par N rotations : deux copies ne doivent pas se recouper."""
-        paths = self.pieces(blade=helicoide(wrap_deg=100.0))
+        """Reconstruire par N rotations : un secteur plan de 100 degres ne se repete pas 8 fois."""
+        paths = self.pieces(blade=secteur_plan(0.030, 0.100, 100.0, 0.010))
         assembly = components.assemble(paths, self.declarations(n_blades=8))
         check = self.resultat(assembly, "nombre de pales")
         self.assertFalse(check.passed)
-        self.assertIn("se recouperaient", check.detail)
+        self.assertIn("se recoupe", check.detail)
+
+    def test_pales_helicoidales_entrelacees(self):
+        """Huit helicoides de 100 degres s'emboitent comme une vis a huit filets.
+
+        L'ancien critere, par etendue angulaire, les declarait en conflit : une
+        copie tournee d'un helicoide en est une copie translatee le long de
+        l'axe, qui ne le recoupe pas.
+        """
+        paths = self.pieces(blade=helicoide(wrap_deg=100.0))
+        assembly = components.assemble(paths, self.declarations(n_blades=8))
+        self.assertTrue(self.resultat(assembly, "nombre de pales").passed)
 
     def test_solides_fluide_inverses(self):
         """La pale doit se trouver entre les deux plans, le long du debit."""
@@ -254,7 +292,8 @@ class TestSensDeRotation(ComposantsTestCase):
         for helice in (+1, -1):
             assembly = components.assemble(
                 self.pieces(blade=helicoide(sense=helice)), self.declarations())
-            signe, _ = components.rotation_from_flow(assembly)
+            signe, _, niveau = components.rotation_from_flow(assembly)
+            self.assertEqual(niveau, "high")
             self.assertNotEqual(signe, 0, "une pale helicoidale impose un sens")
             sens.append(signe)
         self.assertEqual(sens[0], -sens[1], "les deux helices doivent s'opposer")
@@ -268,9 +307,36 @@ class TestSensDeRotation(ComposantsTestCase):
         assembly = components.assemble(
             self.pieces(blade=tore()),
             self.declarations(blade_topology=components.BLADE_TOROIDAL))
-        signe, raison = components.rotation_from_flow(assembly)
+        signe, raison, niveau = components.rotation_from_flow(assembly)
         self.assertEqual(signe, 0)
         self.assertIn("brins", raison)
+        self.assertEqual(niveau, "low")
+
+    def test_refoulement_radial_lu_sur_le_recul_des_aubes(self):
+        """Sortie en bande : le critere de pente axial ne s'applique pas.
+
+        Deux aubes de recul oppose donnent des sens opposes, en confiance
+        moyenne -- le critere suppose des aubes courbees vers l'arriere.
+        """
+        sens = []
+        for recul in (+1, -1):
+            aube = TriMesh(
+                [(r * math.cos(recul * 4.0 * (r - 0.030)) + ORIGINE_CAO[0],
+                  r * math.sin(recul * 4.0 * (r - 0.030)) + ORIGINE_CAO[1], z)
+                 for r in (0.030, 0.050, 0.070, 0.090) for z in (0.0, 0.010)],
+                [(0, 2, 1), (1, 2, 3)],
+            )
+            paths = {
+                components.SLOT_INLET: self.ecrire(decale(synthetic.cylinder(0.030, 0.001, z_center=0.030)), "e.stl"),
+                components.SLOT_OUTLET: self.ecrire(decale(synthetic.tube(0.095, 0.096, 0.012, z_center=0.005)), "s.stl"),
+                components.SLOT_BLADE: self.ecrire(aube, "a.stl"),
+            }
+            assembly = components.assemble(paths, self.declarations(mode="pompe_carenee"))
+            signe, raison, niveau = components.rotation_from_flow(assembly)
+            self.assertEqual(niveau, "medium")
+            self.assertIn("arriere", raison)
+            sens.append(signe)
+        self.assertEqual(sens[0], -sens[1])
 
     def test_rotation_facultative_en_mode_composants(self):
         """Sans --rotation, le sens sort de la mesure et non d'une declaration."""

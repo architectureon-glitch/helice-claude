@@ -26,8 +26,9 @@ from dataclasses import dataclass, field
 
 from . import config
 from .confidence import HIGH, LOW, MEDIUM, ConfidenceMap
+from .geometry.inclusion import SolidTester
 from .io import loader
-from .mesh import TriMesh
+from .mesh import TriMesh, rotation_matrix
 from .numeric import jacobi_eigen
 
 Vec3 = tuple[float, float, float]
@@ -480,22 +481,6 @@ def flow_direction(inlet: FluidPlane, outlet: FluidPlane) -> Vec3:
 # ---------------------------------------------------------------------------
 # §6 : l'outil verifie, il n'accepte pas
 # ---------------------------------------------------------------------------
-def _box_overlap(a: Component, b: Component) -> float:
-    """Volume de recouvrement des boites englobantes, rapporte a la plus petite."""
-    lengths = []
-    for k in range(3):
-        low = max(a.low[k], b.low[k])
-        high = min(a.high[k], b.high[k])
-        lengths.append(max(0.0, high - low))
-    overlap = lengths[0] * lengths[1] * lengths[2]
-    volumes = [
-        abs((c.high[0] - c.low[0]) * (c.high[1] - c.low[1]) * (c.high[2] - c.low[2]))
-        for c in (a, b)
-    ]
-    smallest = min(v for v in volumes if v > 0.0) if any(volumes) else 0.0
-    return overlap / smallest if smallest > 0.0 else 0.0
-
-
 def check_distinct_planes(assembly: ComponentAssembly) -> Check:
     """Entree et sortie distinctes : sans elles, le sens debitant n'existe pas.
 
@@ -613,25 +598,44 @@ def check_common_frame(assembly: ComponentAssembly) -> Check:
                  "toutes les pieces partagent le meme repere et le meme axe")
 
 
+def _inside_fraction(outer: Component, inner: Component) -> float:
+    """Part de la surface de `inner` situee dans le volume de `outer`."""
+    if outer.mesh is None or inner.mesh is None:
+        return 0.0
+    tester = SolidTester(outer.mesh)
+    return tester.fraction_inside(inner.mesh.sample_surface(config.INTERSECTION_SAMPLES))
+
+
 def check_no_interpenetration(assembly: ComponentAssembly) -> Check:
-    """2. Non-interpenetration des boites de moyeu, pale et coque."""
+    """2. Non-interpenetration de moyeu, pale et coque, **en volume**.
+
+    Le test portait sur les boites englobantes. Sur une roue fermee, celle du
+    corps -- moyeu et flasque -- contient toutes les pales par construction :
+    le controle echouait sur toute roue fermee, et un avertissement qui sonne
+    toujours n'avertit plus de rien. On mesure maintenant la part de la surface
+    de chaque piece qui se trouve dans le volume de l'autre.
+    """
     solides = [assembly.component(s) for s in (SLOT_HUB, SLOT_BLADE, SLOT_SHELL)]
-    solides = [c for c in solides if c is not None]
-    pires = []
+    solides = [c for c in solides if c is not None and c.mesh is not None]
+    pires, mesures = [], []
     for index, first in enumerate(solides):
         for second in solides[index + 1:]:
-            part = _box_overlap(first, second)
+            part = max(_inside_fraction(first, second), _inside_fraction(second, first))
+            mesures.append(f"{first.slot} / {second.slot} : {part:.1%}")
             if part > config.OVERLAP_TOLERANCE:
                 pires.append(f"{first.slot} / {second.slot} : {part:.0%}")
     if pires:
         return Check(
             "non-interpenetration", False, False,
-            f"les boites englobantes se recouvrent au-dela de "
-            f"{config.OVERLAP_TOLERANCE:.0%} ({'; '.join(pires)}). Un recouvrement de boites "
-            "n'est pas toujours une interpenetration reelle -- une pale vrillee remplit mal sa "
-            "boite -- mais verifiez que les pieces sont bien celles du meme assemblage."
+            f"des pieces entrent l'une dans l'autre au-dela de {config.OVERLAP_TOLERANCE:.0%} de "
+            f"leur surface ({'; '.join(pires)}). Une pale soudee a son moyeu y plonge un peu ; "
+            "au-dela, verifiez que les pieces sont bien celles du meme assemblage, et placees."
         )
-    return Check("non-interpenetration", True, False, "les boites ne se recouvrent pas")
+    return Check(
+        "non-interpenetration", True, False,
+        "aucune piece n'entre dans une autre au-dela de la tolerance"
+        + (f" ({'; '.join(mesures)})" if mesures else "")
+    )
 
 
 def check_blade_between_planes(assembly: ComponentAssembly) -> Check:
@@ -666,9 +670,14 @@ def check_blade_between_planes(assembly: ComponentAssembly) -> Check:
 def check_blade_count(assembly: ComponentAssembly) -> Check:
     """4. Reconstruire l'assemblage par N rotations, et verifier qu'il tient.
 
-    Deux copies voisines qui se recoupent signifient que le nombre declare est
-    trop grand pour cette pale.  Le test porte sur l'etendue **angulaire** de la
-    pale : une pale qui occupe plus de `2 pi / N` ne peut pas etre repetee N fois.
+    Deux copies qui se recoupent signifient que le nombre declare est trop
+    grand pour cette pale. Le test portait sur l'etendue **angulaire** de la
+    pale -- plus de 2 pi / N, et les copies etaient declarees en conflit. Une
+    aube en boucle ou tres enroulee fait presque le tour de l'axe tout en
+    laissant la place a ses voisines, a un autre rayon ou a une autre hauteur :
+    sur la roue d'essai, 356 degres pour cinq pales qui existent bel et bien.
+    Le test porte maintenant sur les volumes : la surface de chaque copie
+    tournee ne doit pas entrer dans la pale d'origine.
     """
     blade = assembly.component(SLOT_BLADE)
     n_blades = assembly.declarations.n_blades
@@ -676,29 +685,35 @@ def check_blade_count(assembly: ComponentAssembly) -> Check:
         return Check("nombre de pales", True, False, "pale absente : non verifie")
 
     axis = assembly.axis_origin
-    angles = sorted(
-        math.atan2(v[1] - axis[1], v[0] - axis[0]) % (2.0 * math.pi)
-        for v in blade.mesh.vertices
-    )
-    if len(angles) < 2:
-        return Check("nombre de pales", True, False, "pale trop pauvre : non verifie")
-    # Etendue angulaire = tour complet moins le plus grand vide entre deux points.
-    vides = [b - a for a, b in zip(angles, angles[1:])]
-    vides.append(angles[0] + 2.0 * math.pi - angles[-1])
-    etendue = 2.0 * math.pi - max(vides)
-    secteur = 2.0 * math.pi / n_blades
-    if etendue > secteur:
+    tester = SolidTester(blade.mesh)
+    samples = blade.mesh.sample_surface(config.INTERSECTION_SAMPLES)
+    pire, pire_k = 0.0, 0
+    for k in range(1, n_blades // 2 + 1):
+        matrix = rotation_matrix((0.0, 0.0, 1.0), 2.0 * math.pi * k / n_blades)
+        tournes = []
+        for p in samples:
+            local = (p[0] - axis[0], p[1] - axis[1], p[2])
+            x = matrix[0][0] * local[0] + matrix[0][1] * local[1]
+            y = matrix[1][0] * local[0] + matrix[1][1] * local[1]
+            tournes.append((x + axis[0], y + axis[1], p[2]))
+        part = tester.fraction_inside(tournes)
+        if part > pire:
+            pire, pire_k = part, k
+    angle = 360.0 * pire_k / n_blades
+    if pire > config.COPY_OVERLAP_TOLERANCE:
         return Check(
             "nombre de pales", False, False,
-            f"la pale occupe {math.degrees(etendue):.0f} degres d'azimut, plus que les "
-            f"{math.degrees(secteur):.0f} degres du secteur de {n_blades} pales : deux copies "
-            "voisines se recouperaient. Le nombre declare est trop grand pour cette pale, ou "
-            "le fichier importe contient deja plusieurs pales."
+            f"reconstruite par {n_blades} rotations, la pale se recoupe : {pire:.0%} de la "
+            f"surface de sa copie tournee de {angle:.0f} degres est dans son volume. Le nombre "
+            "declare est trop grand pour cette pale, ou le fichier importe contient deja "
+            "plusieurs pales."
         )
     return Check(
         "nombre de pales", True, False,
-        f"la pale occupe {math.degrees(etendue):.0f} degres, le secteur en offre "
-        f"{math.degrees(secteur):.0f} : les {n_blades} copies tiennent sans se recouper"
+        f"les {n_blades} copies de la pale tiennent : au plus {pire:.1%} de la surface d'une "
+        f"copie entre dans sa voisine (tolerance {config.COPY_OVERLAP_TOLERANCE:.0%}, pour les "
+        "pales soudees entre elles). Ce controle ecarte une erreur grossiere ; il ne departage "
+        "pas N et N+1."
     )
 
 
@@ -924,44 +939,87 @@ def helical_slope(mesh: TriMesh, axis: Vec3) -> float:
     return sum((t - mean_t) * (z - mean_z) for t, z in deroules) / variance
 
 
-def rotation_from_flow(assembly: ComponentAssembly) -> tuple[int, str]:
-    """Sens de rotation deduit du sens debitant, et sa justification.
+def sweep_slope(mesh: TriMesh, axis: Vec3) -> float:
+    """Pente `dtheta/dr` de la pale, en rad/m : de combien elle recule en s'eloignant de l'axe.
 
-    Le critere reste `signe(omega) = signe(dz/dtheta)`, mais ce qui etait une
-    **convention** -- « le refoulement va vers -Z » -- devient une grandeur
-    mesuree sur l'assemblage.  Une pale de pente `k` tournant a `omega` pousse
-    le fluide a la vitesse axiale `k omega`, comme un filet de vis : pour que le
-    fluide aille dans le sens debitant, il faut `signe(k omega) = signe(flux_z)`,
-    d'ou `signe(omega) = signe(k . flux_z)`.
+    Regression de l'azimut deroule sur le rayon. Sur une roue centrifuge, les
+    aubes sont presque toujours courbees vers l'arriere : leur bout trane
+    derriere leur pied, dans le sens oppose a la rotation.
+    """
+    if mesh is None or len(mesh.vertices) < 3:
+        return 0.0
+    points = [
+        (math.hypot(v[0] - axis[0], v[1] - axis[1]), math.atan2(v[1] - axis[1], v[0] - axis[0]))
+        for v in mesh.vertices
+    ]
+    reference = points[0][1]
+    deroules = [(r, reference + (t - reference + math.pi) % (2.0 * math.pi) - math.pi) for r, t in points]
+    n = float(len(deroules))
+    mean_r = sum(r for r, _ in deroules) / n
+    mean_t = sum(t for _, t in deroules) / n
+    variance = sum((r - mean_r) ** 2 for r, _ in deroules)
+    if variance <= 0.0:
+        return 0.0
+    return sum((r - mean_r) * (t - mean_t) for r, t in deroules) / variance
 
-    C'est ce qui rend `--rotation` facultatif : l'indetermination venait de la
-    convention, pas de la mesure.  Renvoie `(0, raison)` quand la pale n'a pas
-    de pente exploitable -- une pale purement radiale n'impose aucun sens.
+
+def rotation_from_flow(assembly: ComponentAssembly) -> tuple[int, str, str]:
+    """Sens de rotation deduit de l'assemblage : `(signe, justification, confiance)`.
+
+    Deux criteres, selon ce que la sortie **mesuree** dit de la machine :
+
+    * refoulement axial -- `signe(omega) = signe(dz/dtheta . flux_z)` : une pale
+      de pente `k` tournant a `omega` pousse le fluide a `k omega`, comme un
+      filet de vis. Le sens debitant etant mesure et non suppose, le critere
+      tranche, en confiance haute ;
+    * refoulement radial -- le critere de pente est celui d'une machine axiale
+      et ne s'applique pas : il etait pourtant publie en confiance haute. On lit
+      le recul des aubes, `signe(omega) = -signe(dtheta/dr)`, qui suppose des
+      aubes courbees vers l'arriere -- le cas de presque toutes les pompes --,
+      d'ou la confiance moyenne.
+
+    Une aube **en boucle** n'a ni pente ni recul nets -- ses deux brins vont en
+    sens opposes, c'est ce qui la distingue -- et une regression faite sur la
+    boucle entiere ne mesure rien : le sens reste a declarer.
     """
     blade = assembly.component(SLOT_BLADE)
     if blade is None or blade.mesh is None:
-        return 0, "pale absente : le sens de rotation reste a declarer"
+        return 0, "pale absente : le sens de rotation reste a declarer", LOW
+    if assembly.declarations.blade_topology == BLADE_TOROIDAL:
+        return 0, (
+            "aube en boucle : ses deux brins ont des pentes et des reculs opposes. Une "
+            "regression menee sur la boucle entiere ne mesure rien -- elle rendait pourtant un "
+            "sens en confiance haute. Le sens de rotation reste a declarer par --rotation, "
+            "jusqu'a la lecture brin par brin."
+        ), LOW
+
+    if assembly.outlet is not None and assembly.outlet.radial:
+        recul = sweep_slope(blade.mesh, assembly.axis_origin)
+        if abs(recul) < 1e-6:
+            return 0, (
+                "refoulement radial et aubes sans recul mesurable (aubes droites) : aucun sens "
+                "ne s'impose. Declarez-le par --rotation."
+            ), LOW
+        sign = -1 if recul > 0.0 else 1
+        return sign, (
+            f"refoulement radial : les aubes reculent de {recul:+.2f} rad/m en s'eloignant de "
+            "l'axe. En supposant des aubes courbees vers l'arriere -- le cas de presque toutes "
+            "les pompes centrifuges --, la roue tourne dans ce sens. Confiance moyenne : "
+            "declarez --rotation si les aubes sont courbees vers l'avant."
+        ), MEDIUM
 
     slope = helical_slope(blade.mesh, assembly.axis_origin)
     flow_z = assembly.flow_direction[2]
     produit = slope * flow_z
     if abs(slope) < 1e-9 or abs(flow_z) < 1e-9:
-        if assembly.declarations.blade_topology == BLADE_TOROIDAL:
-            return 0, (
-                "aube en boucle : ses deux brins ont des pentes helicoidales opposees, qui "
-                "s'annulent. Ce n'est pas un defaut de mesure mais une propriete de la forme -- "
-                "une boucle fermee n'a pas de pas net, c'est meme ce qui la distingue. Le "
-                "critere de pente ne peut donc pas trancher, et le sens de rotation reste a "
-                "declarer par --rotation."
-            )
         return 0, (
             "la pale n'a pas de pente helicoidale mesurable, ou le sens debitant est "
             "perpendiculaire a l'axe : aucun sens de rotation ne s'impose. Declarez-le."
-        )
+        ), LOW
     sign = 1 if produit > 0.0 else -1
     return sign, (
         f"pente helicoidale de la pale dz/dtheta = {slope * config.MM_PER_M:+.1f} mm/rad, "
         f"sens debitant projete sur l'axe {flow_z:+.2f} : pour pousser le fluide de l'entree "
         "vers la sortie, la roue doit tourner dans ce sens. Le sens debitant etant mesure sur "
         "l'assemblage et non suppose, l'indetermination disparait."
-    )
+    ), HIGH

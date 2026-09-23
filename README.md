@@ -620,6 +620,28 @@ corrigés et couverts par des tests :
   coupe, avec un test de parité dont la demi-droite évite la couture des solides
   de révolution d'AutoCAD, placée à y = 0.
 
+Replacée dans son vrai repère, la même roue a fait tomber trois contrôles qui
+affirmaient trop :
+
+- **Copies de pale.** Le contrôle comparait l'étendue angulaire de la pale au
+  secteur de 2π/N : une aube en boucle en couvre 356 degrés, et cinq pales qui
+  existent bel et bien étaient déclarées en conflit. Huit hélicoïdes de 100 degrés
+  l'étaient aussi, alors qu'ils s'emboîtent comme une vis à huit filets. Le test
+  porte maintenant sur les volumes : la part de la surface d'une copie tournée qui
+  entre dans la pale d'origine. Sur hel1, 4,5 % — les pales réelles sont soudées
+  entre elles. Le seuil (10 %) écarte l'erreur grossière ; le contrôle ne départage
+  pas N et N+1, et le dit.
+- **Interpénétration.** Le recouvrement de boîtes échouait sur toute roue fermée,
+  dont le corps contient les pales par construction. La mesure porte sur la part
+  de surface d'une pièce dans le volume de l'autre : 9 % de la pale plonge dans
+  moyeu et flasque, pour la soudure.
+- **Sens de rotation.** La pente hélicoïdale est un critère de machine axiale.
+  Sur une aube en boucle, une régression sur la boucle entière ne mesure rien ; sur
+  un refoulement radial, le critère ne s'applique pas. Il rendait pourtant un sens
+  en confiance haute. Aube en boucle : le sens reste à déclarer. Refoulement radial :
+  il se lit sur le recul des aubes, en confiance moyenne, l'hypothèse d'aubes
+  courbées vers l'arrière étant dite.
+
 ### Le genre topologique tranche ce que l'occupation ne peut pas
 
 Une aube en boucle est un tore : une anse par pale. Le fichier d'essai réel rend
@@ -1107,7 +1129,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-357 tests : une phase par module, le banc d'audit qui balaie des roues entières
+359 tests : une phase par module, le banc d'audit qui balaie des roues entières
 et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
 hélice libre, ce que l'outil a le droit d'affirmer, l'import par composants
 déclarés avec ses sept contrôles, les sorties visuelles — palette unique,
