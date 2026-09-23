@@ -14,9 +14,13 @@ Aucune installation n'est nécessaire : l'outil ne tient qu'à la bibliothèque
 standard de **Python 3.11**.
 
 ```bash
-git clone <ce dépôt> && cd helice
+git clone https://github.com/architectureon-glitch/helice-claude && cd helice-claude
 python3 -m impeller_analyzer examples/roue_centrifuge.stl --out rapport/
 ```
+
+Sous Windows, la commande s'appelle `py` (ou `python`) plutôt que `python3`, et
+l'on peut aussi télécharger le dépôt en ZIP depuis GitHub (bouton **Code →
+Download ZIP**) au lieu de le cloner.
 
 Les paquets de [`requirements.txt`](requirements.txt) sont **optionnels** : ils
 élargissent les formats d'import (`trimesh` pour `.3ds`, `cadquery` pour
