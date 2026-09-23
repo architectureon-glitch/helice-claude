@@ -51,6 +51,7 @@ class LevelProfile:
     usable: bool = True
     discharges: bool | None = None  # un chemin mene-t-il du bord de fuite a la fente de sortie
     free_le: bool | None = None  # le bout interieur est-il un bord d'attaque libre (et non un pied)
+    camber: list = field(default_factory=list, repr=False)  # ligne moyenne (r, theta), theta a 2 pi pres
 
 
 @dataclass
@@ -96,6 +97,56 @@ class Branch:
 
 
 @dataclass
+class AxialPush:
+    """Sens ou un brin pousse l'eau le long de l'axe, la ou elle le traverse.
+
+    Une aube dont l'azimut varie avec la hauteur est une vis : en tournant, elle
+    pousse l'eau le long de l'axe dans le sens `-s . signe(dtheta/dz)`. C'est ce
+    qui decide si un brin place sur l'arrivee de l'eau la conduit vers le brin
+    qui refoule, ou la renvoie vers l'oeillard.
+    """
+
+    branch: str = ""
+    passage: tuple[float, float] = (0.0, 0.0)  # m, rayons ou l'eau traverse le brin le long de l'axe
+    toward_working: float = 0.0  # part des rayons ou il pousse l'eau vers le brin qui refoule
+    helix_deg: float = 0.0  # angle moyen de la vis, depuis la tangente : petit, vis serree
+    samples: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "brin": self.branch,
+            "passage_r_m": list(self.passage),
+            "part_poussant_vers_le_brin_refoulant": self.toward_working,
+            "angle_d_helice_deg": self.helix_deg,
+            "rayons_sondes": self.samples,
+        }
+
+
+def _theta_at(camber: list[tuple[float, float]], r: float) -> float | None:
+    """Azimut de la ligne moyenne au rayon `r` (interpolation lineaire)."""
+    for (r0, t0), (r1, t1) in zip(camber, camber[1:]):
+        if r0 <= r <= r1 and r1 > r0:
+            return t0 + (t1 - t0) * (r - r0) / (r1 - r0)
+    return None
+
+
+def axial_twist(levels: list[LevelProfile], r: float) -> float | None:
+    """dtheta/dz de la ligne moyenne au rayon `r`, sur les niveaux qui l'atteignent, rad/m."""
+    points: list[tuple[float, float]] = []
+    for level in sorted(levels, key=lambda l: l.z):
+        theta = _theta_at(level.camber, r)
+        if theta is None:
+            continue
+        if points:
+            previous = points[-1][1]
+            theta = previous + (theta - previous + math.pi) % (2.0 * math.pi) - math.pi
+        points.append((level.z, theta))
+    if len(points) < config.BRANCH_MIN_LEVELS:
+        return None
+    return _slope(points)
+
+
+@dataclass
 class IsolatedBladeAngles:
     """Angles publies, et ce qui les porte."""
 
@@ -111,6 +162,7 @@ class IsolatedBladeAngles:
     beta2_spread: tuple[float, float] = (0.0, 0.0)
     layout: str = ""  # disposition des brins : parallele, un_seul_refoule, indeterminee
     layout_detail: str = ""
+    axial_push: AxialPush | None = None  # brin non refoulant : sens ou il pousse l'eau le long de l'axe
     walls: bool = False  # les parois ont-elles servi a dire ou l'eau sort
     confidence: str = LOW
     warnings: list[str] = field(default_factory=list)
@@ -127,6 +179,9 @@ class IsolatedBladeAngles:
             "rayon_de_fuite_min_max_m": list(self.r_te_range),
             "beta2_min_max_deg": list(self.beta2_spread),
             "disposition_des_brins": self.layout or None,
+            "poussee_axiale_du_brin_non_refoulant": (
+                self.axial_push.to_dict() if self.axial_push else None
+            ),
             "parois_consultees": self.walls,
             "brins": [branch.to_dict() for branch in self.branches],
             "niveaux_lus": sum(1 for level in self.levels if level.usable),
@@ -256,7 +311,7 @@ def level_profile(mesh: TriMesh, axis: Vec3, z: float, rotation_sign: int) -> Le
         if ta is None or tb is None:
             return None
         camber.append((r, 0.5 * (ta + tb)))
-    profile = LevelProfile(z=z, r_min=r_min, r_max=r_max, sweep=_slope(camber))
+    profile = LevelProfile(z=z, r_min=r_min, r_max=r_max, sweep=_slope(camber), camber=camber)
     # Angle local de la ligne moyenne, par differences centrees.
     local = [
         (b[0], blade_angle(b[0], (c[1] - a[1]) / (c[0] - a[0]), rotation_sign))
@@ -481,17 +536,49 @@ def read_isolated_blade(
         else:
             result.layout = "un_seul_refoule"
             muets = [b for b in others if 2 * b.discharging < len(b.levels)]
-            result.layout_detail = (
+            detail = (
                 f"aube en boucle a {len(result.branches)} brins, dont un seul refoule : le "
                 f"{working.name} debouche vers la fente de sortie, le "
-                f"{' et le '.join(b.name for b in muets)} non -- les parois barrent tout chemin "
-                "de son bord de fuite vers l'exterieur. L'eau venue de l'oeillard ne peut que le "
-                f"traverser pour gagner le {working.name} (en serie, en amont), ou tourner dans "
-                f"la cavite ou il loge.{courbure} Ni l'un ni l'autre ne se calcule en ligne "
-                "moyenne : la prerotation qu'il donne a l'eau et ses pertes par brassage ne sont "
-                "pas comptees, et ses angles, lus dans des plans que l'eau n'y suit pas, sont "
-                "indicatifs."
+                f"{' et le '.join(b.name for b in muets)} non -- les parois ferment sa "
+                "chambre sur l'exterieur. Il est sur le chemin de l'eau venue de l'oeillard, "
+                f"qui le traverse pour gagner le {working.name} : en serie, en amont.{courbure}"
             )
+            push = _axial_push(muets[0], working, walls, rotation_sign)
+            result.axial_push = push
+            if push is not None:
+                a, b = (x * mm for x in push.passage)
+                ou = f"la ou l'eau le traverse le long de l'axe (r = {a:.0f} a {b:.0f} mm)"
+                if push.toward_working >= config.AXIAL_PUSH_AGREEMENT:
+                    detail += (
+                        f" {ou.capitalize()}, son pas helicoidal pousse l'eau vers le "
+                        f"{working.name} pour le sens de rotation retenu : il s'oppose a son "
+                        f"retour vers l'oeillard (vis a {push.helix_deg:.0f} deg de la tangente)."
+                    )
+                elif push.toward_working <= 1.0 - config.AXIAL_PUSH_AGREEMENT:
+                    low_confidence = True
+                    detail += (
+                        f" {ou.capitalize()}, son pas helicoidal repousse l'eau vers l'oeillard "
+                        "pour le sens de rotation retenu, a contre-sens du debit. Verifiez le "
+                        f"sens de rotation : dans l'autre, il la pousserait vers le {working.name}."
+                    )
+                else:
+                    detail += (
+                        f" {ou.capitalize()}, son pas helicoidal change de sens : il pousse l'eau "
+                        f"vers le {working.name} sur {push.toward_working:.0%} des rayons "
+                        "seulement."
+                    )
+                if walls.rotating:
+                    detail += (
+                        f" Au-dela de r = {b:.0f} mm, sa chambre, fermee et entrainee avec la "
+                        "roue, tourne en bloc avec l'eau qu'elle contient : le brin n'y fait pas "
+                        "travailler l'eau."
+                    )
+            detail += (
+                f" Le modele de ligne moyenne ne decrit que le {working.name} : la prerotation "
+                "que l'autre brin donne a l'eau n'y est pas comptee, et ses angles de profil, "
+                "lus dans des plans que l'eau n'y suit pas, sont indicatifs."
+            )
+            result.layout_detail = detail
 
     result.confidence = LOW if low_confidence else MEDIUM
     for branch in result.branches:
@@ -511,3 +598,41 @@ def read_isolated_blade(
             "profil y est trop court ou revient sur lui-meme, aucune ligne moyenne ne s'y lit."
         )
     return result
+
+
+def _axial_push(
+    branch: Branch, working: Branch, walls: MeridianWalls, rotation_sign: int
+) -> AxialPush | None:
+    """Sens ou `branch` pousse l'eau le long de l'axe, la ou elle le traverse.
+
+    L'eau traverse le brin non refoulant le long de l'axe pour gagner le brin
+    qui refoule. Le passage est lu dans le plan qui separe les deux brins : les
+    rayons que n'y occupe aucune paroi. Sur hel1, l'ouverture du disque
+    intermediaire, de r = 35 a 62 mm.
+    """
+    if branch.z_mean > working.z_mean:
+        z_cut = 0.5 * (max(l.z for l in working.levels) + min(l.z for l in branch.levels))
+    else:
+        z_cut = 0.5 * (min(l.z for l in working.levels) + max(l.z for l in branch.levels))
+    r_lo = min(l.r_min for l in branch.levels)
+    r_hi = max(l.r_max for l in branch.levels)
+    count = config.AXIAL_PUSH_SAMPLES
+    radii = [r_lo + (k + 0.5) * (r_hi - r_lo) / count for k in range(count)]
+    passage = [r for r in radii if not walls.wall(r, z_cut)]
+    toward = 1 if working.z_mean > branch.z_mean else -1
+    pushes, helix = [], []
+    for r in passage:
+        twist = axial_twist(branch.levels, r)
+        if not twist:
+            continue
+        pushes.append(-rotation_sign * (1 if twist > 0.0 else -1) == toward)
+        helix.append(math.degrees(math.atan2(1.0, r * abs(twist))))
+    if not pushes:
+        return None
+    return AxialPush(
+        branch=branch.name,
+        passage=(min(passage), max(passage)),
+        toward_working=sum(pushes) / len(pushes),
+        helix_deg=sum(helix) / len(helix),
+        samples=len(pushes),
+    )

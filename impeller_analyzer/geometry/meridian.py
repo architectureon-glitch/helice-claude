@@ -36,8 +36,11 @@ class MeridianWalls:
     """Parois de la roue dans le plan meridien, sondees a la demande."""
 
     def __init__(self, testers: Sequence[SolidTester], axis: Vec3, r_max: float,
-                 z_range: tuple[float, float]):
+                 z_range: tuple[float, float], rotating: bool = False):
         self.testers = list(testers)
+        # Vrai si toutes les parois appartiennent a la roue (moyeu, flasques) et
+        # tournent avec elle ; faux des qu'une coque fixe en fait partie.
+        self.rotating = rotating
         self.axis = axis
         self.cell = max(r_max, 1e-9) / config.MERIDIAN_CELLS
         self.z_low, self.z_high = z_range

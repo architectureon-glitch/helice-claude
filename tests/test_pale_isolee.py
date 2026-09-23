@@ -28,12 +28,13 @@ AXE = ORIGINE_CAO
 
 def aube(beta1: float, beta2: float, z0: float = 0.0, z1: float = 0.012, sense: int = 1,
          r1: float = 0.035, r2: float = 0.090, thickness: float = 0.003,
-         twist: float = 0.0, offset=ORIGINE_CAO):
+         twist: float = 0.0, pitch: float = 0.0, offset=ORIGINE_CAO):
     """Aube radiale extrudee entre z0 et z1, beta variant lineairement de beta1 a beta2.
 
     `sense` = +1 : l'azimut croit avec le rayon, l'aube est courbee vers
     l'arriere pour une rotation horaire (signe -1). `twist` fait varier beta1
-    de 0 a `twist` degres du bas au haut de l'aube.
+    de 0 a `twist` degres du bas au haut de l'aube. `pitch` (rad/m) fait de
+    l'aube une vis : son azimut varie de `pitch` par metre de hauteur.
     """
     nr, ns = 40, 7
     grid_a, grid_b = [], []
@@ -44,6 +45,7 @@ def aube(beta1: float, beta2: float, z0: float = 0.0, z1: float = 0.012, sense: 
         for j in range(ns):
             z = z0 + (z1 - z0) * j / (ns - 1)
             theta = sense * synthetic._centrifugal_theta(r, r1, r2, beta1 + twist * j / (ns - 1), beta2)
+            theta += pitch * z
             row_a.append((r * math.cos(theta - half) + offset[0], r * math.sin(theta - half) + offset[1], z))
             row_b.append((r * math.cos(theta + half) + offset[0], r * math.sin(theta + half) + offset[1], z))
         grid_a.append(row_a)
@@ -79,10 +81,10 @@ def aube_en_veine_inclinee(beta1: float, beta2: float, r1: float = 0.035, r2: fl
     return synthetic._closed_box_from_grids(grid_a, grid_b)
 
 
-def boucle():
+def boucle(pitch: float = 0.0):
     """Deux brins etages de courbures opposees : brin bas vers l'arriere (rotation horaire)."""
-    return synthetic.combine([aube(25.0, 35.0, 0.0, 0.010, sense=1),
-                              aube(25.0, 35.0, 0.012, 0.022, sense=-1)])
+    return synthetic.combine([aube(25.0, 35.0, 0.0, 0.010, sense=1, pitch=pitch),
+                              aube(25.0, 35.0, 0.012, 0.022, sense=-1, pitch=pitch)])
 
 
 def lire(mesh, rotation=-1, fente=(0.0, 0.012), entree=0.050, toroidale=False, **kw):
@@ -182,9 +184,9 @@ def parois(chambre_haute_fermee: bool):
     return decale(synthetic.combine(pieces))
 
 
-def murs(mesh) -> MeridianWalls:
+def murs(mesh, rotating: bool = False) -> MeridianWalls:
     lo, hi = mesh.bounds()
-    return MeridianWalls([SolidTester(mesh)], AXE, 0.097, (lo[2], hi[2]))
+    return MeridianWalls([SolidTester(mesh)], AXE, 0.097, (lo[2], hi[2]), rotating=rotating)
 
 
 class TestCheminDeLEau(BaseTestCase):
@@ -223,6 +225,49 @@ class TestCheminDeLEau(BaseTestCase):
     def test_couronne_sans_aube_signalee(self):
         angles = lire(aube(20.0, 30.0), outlet_radius=0.110)
         self.assertTrue(any("couronne sans aube" in w for w in angles.warnings))
+
+
+class TestAntiRetour(BaseTestCase):
+    """Le brin qui ne refoule pas pousse-t-il l'eau vers celui qui refoule ?
+
+    Sur hel1, c'est voulu : la chambre haute, fermee, et le brin qu'elle loge
+    empechent l'eau de repartir vers l'oeillard. Une aube dont l'azimut varie
+    avec la hauteur est une vis ; selon le sens de rotation, elle pousse l'eau
+    vers le brin bas, ou la renvoie d'ou elle vient.
+    """
+
+    PAS = -60.0  # rad/m : l'azimut decroit en montant
+
+    def lire_boucle(self, rotation: int, rotating: bool = True):
+        return lire(boucle(self.PAS), rotation=rotation, fente=(0.0, 0.010), toroidale=True,
+                    walls=murs(parois(True), rotating=rotating), outlet_radius=0.0955)
+
+    def test_pas_de_vis_mesure(self):
+        angles = lire(aube(25.0, 35.0, pitch=self.PAS))
+        for r in (0.045, 0.060, 0.075):
+            self.assertLess(abs(iso.axial_twist(angles.working.levels, r) / self.PAS - 1.0), 0.02)
+
+    def test_pousse_vers_le_brin_bas(self):
+        """Rotation horaire, azimut decroissant en montant : l'eau descend vers le brin bas."""
+        angles = self.lire_boucle(rotation=-1)
+        poussee = angles.axial_push
+        self.assertEqual(poussee.branch, "brin haut")
+        self.assertEqual(poussee.toward_working, 1.0)
+        # Le passage est l'ouverture du disque intermediaire, sous r = 60 mm.
+        self.assertLess(poussee.passage[1], 0.0605)
+        self.assertIn("s'oppose a son retour vers l'oeillard", angles.layout_detail)
+        self.assertIn("tourne en bloc", angles.layout_detail)
+
+    def test_rotation_inverse_renvoie_l_eau(self):
+        angles = self.lire_boucle(rotation=+1)
+        self.assertEqual(angles.axial_push.toward_working, 0.0)
+        self.assertIn("repousse l'eau vers l'oeillard", angles.layout_detail)
+        self.assertEqual(angles.confidence, "low")
+
+    def test_coque_fixe_pas_de_rotation_en_bloc(self):
+        """Une coque fixe parmi les parois : la chambre ne tourne pas forcement avec la roue."""
+        angles = self.lire_boucle(rotation=-1, rotating=False)
+        self.assertNotIn("tourne en bloc", angles.layout_detail)
 
 
 class TestPassageLibre(ComposantsTestCase):

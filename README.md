@@ -685,10 +685,24 @@ fente.
 Sur hel1, ce tracé a renversé une conclusion. Le corps porte un disque
 intermédiaire, ouvert seulement entre r = 35 et 62 mm, et la chambre du dessus est
 fermée à sa périphérie. Le brin bas débouche vers la fente par ses huit niveaux ; le
-brin haut par aucun. L'eau venue de l'œillard ne peut que le traverser pour gagner
-le brin bas — en série, en amont — ou tourner dans la cavité où il loge. L'outil le
-dit, sans calculer ni la prérotation que ce brin donne à l'eau, ni ses pertes par
-brassage. Sans pièce de paroi, il déclare la disposition indéterminée.
+brin haut par aucun. L'eau venue de l'œillard le traverse pour gagner le brin bas :
+les deux brins sont en série, et non en parallèle. Sans pièce de paroi, l'outil
+déclare la disposition indéterminée.
+
+C'est voulu : la chambre fermée et le brin qu'elle loge doivent empêcher l'eau de
+repartir vers l'œillard. L'outil le vérifie. Une aube dont l'azimut varie avec la
+hauteur est une vis : en tournant dans le sens s, elle pousse l'eau le long de
+l'axe dans le sens −s · signe(dθ/dz). Le passage où l'eau traverse le brin haut se
+lit dans le plan qui sépare les deux brins — les rayons qu'aucune paroi n'y
+occupe, l'ouverture du disque intermédiaire. Sur hel1, en rotation horaire vue de
+l'entrée, le brin haut y pousse l'eau vers le brin bas sur tous les rayons sondés,
+de 39 à 61 mm, comme une vis inclinée de 10 degrés sur la tangente. En rotation
+anti-horaire, il la renverrait vers l'œillard, et l'outil le signale en confiance
+basse. Au-delà de l'ouverture, la chambre, bordée par le seul corps de la roue,
+tourne en bloc avec l'eau qu'elle contient : le brin n'y fait pas travailler
+l'eau, et il n'y a pas de brassage à compter. Le modèle de ligne moyenne ne décrit
+que le brin bas ; la prérotation que le brin haut donne à l'eau n'y est pas
+comptée.
 
 Le même tracé a mesuré deux écarts sur hel1 :
 
@@ -1192,7 +1206,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-378 tests : une phase par module, le banc d'audit qui balaie des roues entières
+382 tests : une phase par module, le banc d'audit qui balaie des roues entières
 et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
 hélice libre, ce que l'outil a le droit d'affirmer, l'import par composants
 déclarés avec ses sept contrôles, les sorties visuelles — palette unique,

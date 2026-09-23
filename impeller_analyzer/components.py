@@ -516,7 +516,8 @@ def meridian(assembly: ComponentAssembly) -> MeridianWalls | None:
     pieces = [c for c in assembly.components.values() if c.mesh is not None]
     r_max = max(c.radial_extent(axis)[1] for c in pieces)
     z_range = (min(c.low[2] for c in parois), max(c.high[2] for c in parois))
-    return MeridianWalls(testers, axis, r_max, z_range)
+    rotating = assembly.component(SLOT_SHELL) is None
+    return MeridianWalls(testers, axis, r_max, z_range, rotating=rotating)
 
 
 def _passage_points(component: Component, plane: FluidPlane, axis: Vec3) -> list[Vec3]:
