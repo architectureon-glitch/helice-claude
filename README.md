@@ -1336,7 +1336,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-409 tests : une phase par module, le banc d'audit qui balaie des roues entières
+411 tests : une phase par module, le banc d'audit qui balaie des roues entières
 et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
 hélice libre, ce que l'outil a le droit d'affirmer, l'import par composants
 déclarés avec ses sept contrôles, les sorties visuelles — palette unique,

@@ -821,7 +821,12 @@ def check_blade_between_planes(assembly: ComponentAssembly) -> Check:
 
     entree, sortie = projection(assembly.inlet.centroid), projection(assembly.outlet.centroid)
     pale = projection(blade.centroid)
-    if entree <= pale <= sortie:
+    # Refoulement radial : la fente est une bande, et la pale qui y refoule est a
+    # sa hauteur, pas en deca -- sur une roue a sortie mediane, son centroide est
+    # au niveau de celui de la bande. L'intervalle s'etend donc a la demi-hauteur
+    # de la bande.
+    marge = 0.5 * assembly.outlet.height if assembly.outlet.radial else 0.0
+    if entree <= pale <= sortie + marge:
         return Check("position de la pale", True, False,
                      "le centroide de la pale est bien entre les deux plans fluide")
     return Check(
@@ -1084,6 +1089,18 @@ def derive_fluid_slices(hub: Component) -> tuple[Component | None, Component | N
 
     thickness = config.DERIVED_SLICE_THICKNESS
     gap = config.DERIVED_SLICE_GAP
+    # Un flasque perce aux deux bouts : le petit percement est le passage de
+    # l'arbre, pas une entree d'eau -- la roue classique de 8 pouces essayee
+    # avait un alesage de 6,5 mm sous un oeillard de 45,7.
+    if top is not None and bottom is not None:
+        if bottom[1] < config.DERIVED_BORE_RATIO * top[1]:
+            raisons.append(f"percement de r = {bottom[1] * mm:.1f} mm au flasque inferieur lu comme "
+                           "le passage de l'arbre")
+            bottom = None
+        elif top[1] < config.DERIVED_BORE_RATIO * bottom[1]:
+            raisons.append(f"percement de r = {top[1] * mm:.1f} mm au flasque superieur lu comme "
+                           "le passage de l'arbre")
+            top = None
     if (top is None) == (bottom is None):
         raisons.append(
             "entree non deduite : " + ("les deux flasques d'extremite sont perces autour de "

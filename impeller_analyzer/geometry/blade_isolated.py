@@ -51,6 +51,7 @@ class LevelProfile:
     usable: bool = True
     discharges: bool | None = None  # un chemin mene-t-il du bord de fuite a la fente de sortie
     free_le: bool | None = None  # le bout interieur est-il un bord d'attaque libre (et non un pied)
+    embedded: bool = False  # niveau noye dans une paroi : pied soude, pas une surface de courant
     camber: list = field(default_factory=list, repr=False)  # ligne moyenne (r, theta), theta a 2 pi pres
 
 
@@ -392,6 +393,19 @@ def read_isolated_blade(
     # - la jonction des brins, ou le profil fait un crochet : les deux niveaux
     #   qui encadrent un changement de sens de recul, et tout niveau dont le
     #   recul moyen s'effondre.
+    # Niveaux noyes dans une paroi : la pale soudee plonge dans ses flasques, et
+    # la coupe y rend son pied, pas une surface de courant. Sur la roue classique
+    # de 8 pouces essayee, deux niveaux sur vingt-quatre, qui ajoutaient 2,5 mm a
+    # la hauteur du bord de fuite.
+    embedded = 0
+    if walls is not None:
+        for level in result.levels:
+            radii = [level.r_min + (level.r_max - level.r_min) * (k + 0.5) / config.EMBEDDED_SAMPLES
+                     for k in range(config.EMBEDDED_SAMPLES)]
+            if sum(walls.wall(r, level.z) for r in radii) > config.EMBEDDED_FRACTION * len(radii):
+                level.usable = False
+                level.embedded = True
+                embedded += 1
     widest = max(level.r_max - level.r_min for level in result.levels)
     typical = sorted(abs(level.sweep) for level in result.levels)[len(result.levels) // 2]
     for level in result.levels:
@@ -628,11 +642,16 @@ def read_isolated_blade(
             + (f" ; {branch.discharging} niveau(x) sur {len(branch.levels)} debouchent vers la "
                "fente de sortie." if meridian else ".")
         )
-    ecartes = sum(1 for level in result.levels if not level.usable)
+    ecartes = sum(1 for level in result.levels if not level.usable and not level.embedded)
     if ecartes:
         result.notes.append(
             f"{ecartes} niveau(x) ecarte(s) -- pointes de la boucle ou jonction des brins : le "
             "profil y est trop court ou revient sur lui-meme, aucune ligne moyenne ne s'y lit."
+        )
+    if embedded:
+        result.notes.append(
+            f"{embedded} niveau(x) noye(s) dans une paroi, ecarte(s) : la pale y plonge dans son "
+            "flasque, et la coupe rend son pied soude, pas une surface de courant."
         )
     return result
 

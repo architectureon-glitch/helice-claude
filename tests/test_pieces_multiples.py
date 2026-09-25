@@ -95,6 +95,16 @@ class TestPlansDeduits(PiecesTestCase):
         self.assertIn("oeillard du flasque superieur", controle.detail)
         self.assertEqual(assembly.confidence.get_level("sections"), "medium")
 
+    def test_passage_d_arbre_n_est_pas_une_entree(self):
+        """Flasque arriere perce pour l'arbre : l'entree reste l'oeillard du flasque avant."""
+        bas = decale(synthetic.tube(0.006, 0.097, 0.003, z_center=-0.0015))
+        haut = decale(synthetic.tube(0.040, 0.097, 0.003, z_center=0.0135))
+        corps = [self.ecrire(bas, "bas_perce.stl"), self.ecrire(haut, "haut_perce.stl")]
+        assembly = self.assembler(**{components.SLOT_HUB: corps})
+        self.assertGreater(assembly.inlet.centroid[2], 0.015)
+        controle = next(c for c in assembly.checks if c.name == "entree et sortie")
+        self.assertIn("passage de l'arbre", controle.detail)
+
     def test_sans_corps_les_plans_restent_obligatoires(self):
         with self.assertRaises(ValueError) as ctx:
             components.assemble({components.SLOT_BLADE: self.pales()[0]},

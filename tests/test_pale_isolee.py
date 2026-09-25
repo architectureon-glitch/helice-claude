@@ -226,6 +226,13 @@ class TestCheminDeLEau(BaseTestCase):
         self.assertTrue(walls.reaches(0.085, -0.004, 0.0955, (0.002, 0.010)))
         self.assertFalse(walls.reaches(0.085, -0.004, 0.0955, (-0.012, -0.011)))
 
+    def test_niveaux_noyes_dans_la_paroi(self):
+        """Une pale soudee plonge dans son flasque : ces niveaux ne comptent pas au bord de fuite."""
+        mesh = aube(20.0, 30.0, -0.002, 0.012)  # 2 mm dans le disque arriere (z < 0)
+        angles = lire(mesh, fente=(0.0, 0.012), walls=murs(parois(False)), outlet_radius=0.0955)
+        self.assertLess(abs(angles.te_height - 0.012), 0.0012)
+        self.assertTrue(any("noye" in note for note in angles.notes))
+
     def test_couronne_sans_aube_signalee(self):
         angles = lire(aube(20.0, 30.0), outlet_radius=0.110)
         self.assertTrue(any("couronne sans aube" in w for w in angles.warnings))
