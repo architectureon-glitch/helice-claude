@@ -171,6 +171,11 @@ est toroïdale par défaut ; une pale étanche d'un seul tenant, de genre 0, n'a
 d'anse et ne peut pas être une boucle : elle est refusée. Le drapeau est levé par
 la ligne de commande et la page ; l'appel direct au moteur le laisse baissé.
 
+**Une roue classique comme référence.** `--reference` lève le refus : la roue
+classique est analysée comme point de comparaison, sans comparatif, et le rapport
+le dit en tête. Sur la page, le champ « Forme des aubes » propose « classique,
+comme référence ».
+
 ## Comment ça marche
 
 L'outil ne travaille pas directement sur le maillage mais sur une **carte
@@ -662,6 +667,24 @@ n'est pas une section de passage. L'aire retenue pour la suite est toujours la
 part libre ; le contrôle signale l'écart au-delà de 5 %. Deux s'ajoutent selon ce
 qui est fourni : **pales distinctes**, quand chaque pale a son fichier, et
 **entrée et sortie**, quand elles sont déduites du corps.
+
+### Un seul fichier fait de pièces séparées
+
+Une roue exportée d'un bloc peut garder ses pièces disjointes : les aubes d'un
+côté, les flasques et le moyeu de l'autre. C'est le cas de la roue classique de
+8 pouces essayée : douze corps dans un seul STL. L'import global la lisait pour
+axiale, à 89 degrés. Avec `--machine`, l'outil sépare maintenant le fichier : les
+aubes sont le plus grand groupe de corps identiques, au moins deux, au pas de
+360/N degrés ; le reste est le corps. Les pièces sont écrites dans
+`<dossier de sortie>/pieces/`, puis analysées en mode composants, entrée et
+sortie déduites du corps :
+
+```bash
+python -m impeller_analyzer dd.stl --unit cm --reference --machine pompe_carenee
+```
+
+Sans `--machine`, la lecture globale est faite comme avant, et le rapport dit en
+tête que la lecture pièce par pièce serait plus sûre.
 
 ### Une roue donnée comme on la dessine
 
@@ -1336,7 +1359,7 @@ n'apparaît ailleurs. Pour recaler l'outil, on ne modifie que ce fichier.
 python -m unittest discover -s tests -t tests
 ```
 
-411 tests : une phase par module, le banc d'audit qui balaie des roues entières
+417 tests : une phase par module, le banc d'audit qui balaie des roues entières
 et confronte chaque grandeur relue au dessin, les invariants de l'analyse en
 hélice libre, ce que l'outil a le droit d'affirmer, l'import par composants
 déclarés avec ses sept contrôles, les sorties visuelles — palette unique,

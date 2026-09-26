@@ -935,6 +935,103 @@ def _connected_parts(mesh: TriMesh) -> int:
     return max(1, parts)
 
 
+def split_bodies(mesh: TriMesh) -> list[TriMesh]:
+    """Les corps disjoints d'un maillage, chacun avec ses seuls sommets."""
+    voisins: dict[int, set] = {}
+    for a, b, c in mesh.faces:
+        for x, y in ((a, b), (b, c), (c, a)):
+            voisins.setdefault(x, set()).add(y)
+            voisins.setdefault(y, set()).add(x)
+    corps_de: dict[int, int] = {}
+    for depart in voisins:
+        if depart in corps_de:
+            continue
+        numero = len(set(corps_de.values()))
+        pile = [depart]
+        corps_de[depart] = numero
+        while pile:
+            for suivant in voisins[pile.pop()]:
+                if suivant not in corps_de:
+                    corps_de[suivant] = numero
+                    pile.append(suivant)
+    faces_de: dict[int, list] = {}
+    for face in mesh.faces:
+        faces_de.setdefault(corps_de[face[0]], []).append(face)
+    bodies = []
+    for faces in faces_de.values():
+        used = sorted({v for face in faces for v in face})
+        index = {v: k for k, v in enumerate(used)}
+        bodies.append(TriMesh([mesh.vertices[v] for v in used],
+                              [tuple(index[v] for v in face) for face in faces]))
+    return bodies
+
+
+def split_assembly(path: str, unit: str | float | None, directory: str) -> tuple[dict, str] | None:
+    """Un fichier unique fait de pieces separees : ses aubes d'un cote, son corps de l'autre.
+
+    Les aubes sont le plus grand groupe de corps identiques -- meme nombre de
+    faces, meme volume a 1 % pres --, au moins deux, espaces de 360/N degres
+    autour de l'axe. Le reste est le corps. Les pieces sont ecrites dans
+    `directory`, en centimetres, pour le mode composants ; `None` si le fichier
+    n'a pas cette forme (d'un seul tenant, ou sans aubes repetees).
+    """
+    mesh, _ = loader.load_mesh(path, unit=unit)
+    bodies = split_bodies(mesh)
+    if len(bodies) < 3:
+        return None
+    lo, hi = mesh.bounds()
+    axis = (0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]), 0.0)
+    volumes = [abs(b.volume()) for b in bodies]
+    groups: list[list[int]] = []
+    for k, body in enumerate(bodies):
+        for group in groups:
+            ref = group[0]
+            if (len(bodies[ref].faces) == len(body.faces)
+                    and abs(volumes[k] / volumes[ref] - 1.0) < config.BLADES_VOLUME_TOLERANCE * 0.5):
+                group.append(k)
+                break
+        else:
+            groups.append([k])
+    candidates = [g for g in groups if config.DECLARED_BLADES_MIN <= len(g) <= config.DECLARED_BLADES_MAX]
+    if not candidates:
+        return None
+    blades = max(candidates, key=len)
+    n = len(blades)
+
+    def azimuth(body: TriMesh) -> tuple[float, float]:
+        cx = sum(v[0] for v in body.vertices) / len(body.vertices) - axis[0]
+        cy = sum(v[1] for v in body.vertices) / len(body.vertices) - axis[1]
+        return math.degrees(math.atan2(cy, cx)) % 360.0, math.hypot(cx, cy)
+
+    positions = [azimuth(bodies[k]) for k in blades]
+    if min(lever for _, lever in positions) >= config.BLADES_AZIMUTH_LEVER:
+        angles = sorted(a for a, _ in positions)
+        gaps = [(b - a) % 360.0 for a, b in zip(angles, angles[1:] + angles[:1])]
+        if max(abs(g - 360.0 / n) for g in gaps) > config.BLADES_AZIMUTH_TOLERANCE_DEG:
+            return None
+    others = [k for k in range(len(bodies)) if k not in blades]
+    if not others:
+        return None
+    os.makedirs(directory, exist_ok=True)
+    from .io import writer
+
+    def write(body: TriMesh, name: str) -> str:
+        target = os.path.join(directory, name)
+        writer.write_stl(body, target, unit_factor=config.UNIT_FACTOR)
+        return target
+
+    paths = {
+        SLOT_BLADE: [write(bodies[k], f"pale_{i + 1:02d}.stl") for i, k in enumerate(blades)],
+        SLOT_HUB: [write(bodies[k], f"corps_{i + 1:02d}.stl") for i, k in enumerate(others)],
+    }
+    detail = (
+        f"fichier en {len(bodies)} pieces separees : {n} aubes identiques au pas de "
+        f"{360.0 / n:.0f} deg, et {len(others)} pieces de corps. Analyse en mode composants ; "
+        f"pieces ecrites dans {directory}."
+    )
+    return paths, detail
+
+
 def _boundary_loops(mesh: TriMesh) -> int:
     """Nombre de composantes connexes du bord (chaines fermees d'aretes libres)."""
     edges = mesh.boundary_edges()

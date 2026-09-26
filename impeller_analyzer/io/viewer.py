@@ -896,6 +896,7 @@ th{font-weight:500; color:var(--ink-soft); font-size:.78rem}
                 <select id="forme">
                   <option value="">lue sur la piece</option>
                   <option value="toroidale">declaree toroidale</option>
+                  <option value="classique">classique, comme reference</option>
                 </select>
               </div>
               <div class="champ">

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from . import __version__, config
@@ -110,6 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
              "c'est la valeur retenue par defaut",
     )
 
+    parser.add_argument(
+        "--reference", action="store_true",
+        help="analyser une roue classique comme reference : l'outil, qui n'etudie que les "
+             "helices toroidales, la refuserait sinon. Aucun comparatif n'est produit",
+    )
     parser.add_argument(
         "--machine",
         choices=list(MACHINE_MODELS),
@@ -216,9 +222,12 @@ def options_from_args(args: argparse.Namespace) -> Options:
             components.SLOT_OUTLET: args.sortie_fluide,
             components.SLOT_BLADE: args.pale,
         },
-        blade_topology=args.topologie_pale or components.BLADE_TOROIDAL,
+        blade_topology=args.topologie_pale or (
+            components.BLADE_CONVENTIONAL if args.reference else components.BLADE_TOROIDAL
+        ),
         topology_declared=args.topologie_pale is not None,
-        toroidal_only=True,
+        toroidal_only=not args.reference,
+        reference=args.reference,
         wheel_type=args.type_de_roue,
         propulsion_speed=args.vitesse_avance,
         fluid=args.fluide,
@@ -309,6 +318,8 @@ def summarise(result, produced: dict[str, str]) -> str:
                 f"{variant.quantity.lower()} {variant.normal:.2f} {variant.unit} au lieu de "
                 f"{variant.toroidal:.2f}"
             )
+    if result.options is not None and result.options.reference:
+        lines.append("Roue classique analysee comme reference (--reference) : pas de comparatif.")
     lines.append(f"Confiance globale : {result.overall_confidence()}")
     if result.warnings:
         lines.append(f"{len(result.warnings)} avertissement(s), voir le rapport")
@@ -354,7 +365,27 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             result = run_components(options)
         elif args.fichier:
-            result = run(args.fichier, options)
+            # Un fichier fait de pieces separees -- aubes et corps -- se lit mieux
+            # piece par piece : l'import global lisait une roue classique de 8
+            # pouces pour axiale, a 89 degres.
+            split = components.split_assembly(
+                args.fichier, options.unit, os.path.join(args.out, "pieces"))
+            if split is not None and args.machine != MACHINE_AUTO:
+                paths, detail = split
+                options.component_paths = paths
+                options.unit = "cm"
+                result = run_components(options)
+                result.warnings.insert(0, detail)
+            else:
+                result = run(args.fichier, options)
+                if split is not None:
+                    # Sans modele hydraulique declare, pas de mode composants : la
+                    # lecture globale est faite, et le rapport dit comment mieux faire.
+                    result.warnings.insert(0, (
+                        f"{split[1].split(' Analyse en mode composants')[0]} Declarez --machine "
+                        "pompe_carenee (ou helice_libre) pour les analyser piece par piece, "
+                        "lecture plus sure que la lecture globale faite ici."
+                    ))
         else:
             print(
                 "erreur : aucun fichier a analyser. Donnez un fichier de geometrie en import "
@@ -368,6 +399,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except ValueError as error:
         print(f"erreur : {error}", file=sys.stderr)
+        return 2
+    except OSError as error:
+        # Les pieces d'un fichier separe sont ecrites dans le dossier de sortie
+        # avant l'analyse : un dossier impossible s'y revele deja.
+        print(
+            f"erreur d'ecriture : impossible d'ecrire dans {args.out!r} "
+            f"({error.strerror or error}). Choisissez un autre dossier avec --out.",
+            file=sys.stderr,
+        )
         return 2
     except Exception:  # pragma: no cover - filet de derniere instance
         return _internal_error()

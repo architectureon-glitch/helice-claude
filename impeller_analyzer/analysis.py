@@ -68,6 +68,9 @@ class Options:
     # de reference au comparatif --, d'ou un drapeau que la ligne de commande et la
     # page levent, et que l'appel direct laisse baisse.
     toroidal_only: bool = False
+    # Roue classique analysee comme reference (--reference) : le refus est leve,
+    # et le rapport le dit en tete.
+    reference: bool = False
     machine: str = MACHINE_AUTO  # modele hydraulique : auto, pompe carenee, ou helice libre
     wheel_type: str = WHEEL_AUTO  # famille de roue declaree ; prime sur la classification
     propulsion_speed: float | None = None  # m/s - vitesse d'avance en helice libre ; None : pas d'analyse propulsive
@@ -737,8 +740,18 @@ def run(path: str, options: Options | None = None) -> AnalysisResult:
         )
 
     _fill_provenance(result, options)
+    _reference_notice(result, options)
     result.elapsed_s = time.time() - started
     return result
+
+
+def _reference_notice(result: AnalysisResult, options: Options) -> None:
+    """En tete du rapport, quand la roue est analysee comme reference."""
+    if options.reference:
+        result.warnings.insert(0, (
+            "roue analysee comme reference (--reference) : l'outil n'etudie que les helices "
+            "toroidales, et celle-ci sert de point de comparaison. Aucun comparatif n'est produit."
+        ))
 
 
 def _curves(
@@ -965,6 +978,7 @@ def run_components(options: Options) -> AnalysisResult:
         result.provenance.set("sens_de_rotation", MESURE)
     for quantity in ("sections", "rayon_de_moyeu"):
         result.provenance.set(quantity, MESURE)
+    _reference_notice(result, options)
     result.elapsed_s = time.time() - started
     return result
 
@@ -972,7 +986,8 @@ def run_components(options: Options) -> AnalysisResult:
 #: Ce que l'outil etudie, dit une fois pour toutes les raisons de refus.
 TOROIDAL_SCOPE = (
     "L'outil n'etudie que les helices toroidales ; le calcul d'une helice normale n'est "
-    "plus publie seul, il sert de reference au comparatif d'une helice toroidale."
+    "plus publie seul, il sert de reference au comparatif d'une helice toroidale. Pour "
+    "analyser une roue classique comme point de comparaison : --reference."
 )
 
 

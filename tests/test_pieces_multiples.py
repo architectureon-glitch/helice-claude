@@ -163,5 +163,66 @@ class TestPalesDistinctes(PiecesTestCase):
         self.assertIn("ANALYSE INTERROMPUE : la pale est declaree conventionnelle", out.getvalue())
 
 
+class TestReferenceEtPiecesSeparees(PiecesTestCase):
+    """--reference, et un fichier unique fait de pieces separees."""
+
+    def fichier_en_pieces(self):
+        bas = decale(synthetic.cylinder(0.097, 0.003, z_center=-0.0015))
+        haut = decale(synthetic.tube(0.040, 0.097, 0.003, z_center=0.0135))
+        base = pale.aube(20.0, 30.0, 0.0, 0.012)
+        pieces = [bas, haut] + [tourne(base, 72.0 * k) for k in range(5)]
+        return self.ecrire(synthetic.combine(pieces), "roue_en_pieces.stl")
+
+    def lancer(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main([*args, "--out", self.path("sortie"), "--sans-vue3d"])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_separation_des_aubes_et_du_corps(self):
+        chemins, detail = components.split_assembly(
+            self.fichier_en_pieces(), "cm", self.path("pieces"))
+        self.assertEqual(len(chemins[components.SLOT_BLADE]), 5)
+        self.assertEqual(len(chemins[components.SLOT_HUB]), 2)
+        self.assertIn("5 aubes identiques au pas de 72 deg", detail)
+
+    def test_piece_d_un_seul_tenant_non_separee(self):
+        seule = self.ecrire(decale(synthetic.cylinder(0.05, 0.01)), "seule.stl")
+        self.assertIsNone(components.split_assembly(seule, "cm", self.path("pieces")))
+
+    def test_roue_classique_en_reference(self):
+        code, sortie, erreur = self.lancer(self.fichier_en_pieces(), "--unit", "cm", "--reference",
+                                           "--machine", "pompe_carenee", "--rotation", "horaire",
+                                           "--rpm", "1450")
+        self.assertEqual(code, 0, erreur)
+        self.assertIn("Roue classique analysee comme reference", sortie)
+        self.assertNotIn("Si l'helice etait normale", sortie)
+        self.assertEqual(len([f for f in os.listdir(self.path("sortie/pieces"))
+                              if f.startswith("pale_")]), 5)
+
+    def test_sans_reference_la_roue_classique_est_refusee(self):
+        code, sortie, _ = self.lancer(self.fichier_en_pieces(), "--unit", "cm",
+                                      "--machine", "pompe_carenee", "--rpm", "1450")
+        self.assertEqual(code, 0)
+        self.assertIn("ANALYSE INTERROMPUE", sortie)
+        self.assertIn("--reference", sortie)
+
+    def test_pieces_separees_sans_machine(self):
+        """Sans --machine, la lecture globale est faite, et le rapport dit comment mieux faire."""
+        code, _, erreur = self.lancer(self.fichier_en_pieces(), "--unit", "cm", "--reference")
+        self.assertEqual(code, 0, erreur)
+        with open(self.path("sortie/rapport.md"), encoding="utf-8") as handle:
+            rapport = handle.read()
+        self.assertIn("pieces separees", rapport)
+        self.assertIn("Declarez --machine pompe_carenee", rapport)
+
+    def test_page_classique(self):
+        from impeller_analyzer import serve
+
+        options = serve.options_from_query({"forme": ["classique"]})
+        self.assertFalse(options.toroidal_only)
+        self.assertTrue(options.reference)
+
+
 if __name__ == "__main__":  # pragma: no cover - execution directe
     unittest.main()

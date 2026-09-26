@@ -156,10 +156,15 @@ def _forme(query: dict) -> dict:
     value = (query.get("forme", [""])[0] or "").strip()
     if not value:
         return {}
+    if value == "classique":
+        # Roue classique analysee comme reference : le refus est leve.
+        return {"blade_topology": components.BLADE_CONVENTIONAL, "topology_declared": True,
+                "toroidal_only": False, "reference": True}
     if value != components.BLADE_TOROIDAL:
         raise BadRequest(
             f"forme des aubes inconnue : {value!r}. L'outil n'etudie que les helices toroidales ; "
-            "laissez le champ vide pour que la lecture tranche."
+            "laissez le champ vide pour que la lecture tranche, ou choisissez « classique » pour "
+            "analyser une roue de reference."
         )
     return {"blade_topology": components.BLADE_TOROIDAL, "topology_declared": True}
 
@@ -182,8 +187,7 @@ def options_from_query(query: dict) -> Options:
         suction_losses=_float(query, "pertes", config.PERTES_ASPIRATION),
         grid_nr=grid,
         grid_nz=grid,
-        toroidal_only=True,
-        **_forme(query),
+        **{"toroidal_only": True, **_forme(query)},
     )
 
 
